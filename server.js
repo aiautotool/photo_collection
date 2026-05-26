@@ -1,17 +1,18 @@
 var http = require('http');
 var url = require('url');
 var join = require('path').join;
-var qs = require('querystring');
 var fs = require('fs');
 var mkdirp = require('mkdirp');
 var formidable = require('formidable');
 var fileServer = require('./lib/fileserver.js');
+var httpHelpers = require('./lib/http');
+var staticImages = require('./lib/static-images');
 var mysql = require('mysql');
 var db = mysql.createConnection({
-	host: '127.0.0.1',
-	user: 'root',
-	password: '',
-	database: 'photo_collection' 
+	host: process.env.DB_HOST || '127.0.0.1',
+	user: process.env.DB_USER || 'root',
+	password: process.env.DB_PASSWORD || '',
+	database: process.env.DB_NAME || 'photo_collection'
 });
 db.connect(function(err) {
 	if(err)throw err;
@@ -20,31 +21,26 @@ db.connect(function(err) {
 http.createServer(function(req, resp) {
 	switch (req.method) {
 		case 'GET':
-			var new_uri = url.parse(req.url);
+			var new_uri = url.parse(req.url, true);
 			if(new_uri.pathname.indexOf('/public/images')== 0){
-				// console.log(new_uri);
-				fs.createReadStream('.'+new_uri.pathname).pipe(resp);
-				// resp.end("a phto");
+				staticImages.serve(new_uri.pathname, resp);
 				return;	
 			}
 			if(new_uri.pathname == '/api' ){
-				if(new_uri.query == null){
+				if(!new_uri.query.email || !new_uri.query.password){
 					// console.log('Invalid api');
 					fs.createReadStream('./public/form.html').pipe(resp);
 					return;
 				}
-				var para = new_uri.query.split('&');
-				// console.log(para[0].split('='));
-				// console.log(para[1].split('='));
-				db.query("select * from users where email = ?", para[0].split('=')[1], function (err, row) {
+				db.query("select * from users where email = ?", new_uri.query.email, function (err, row) {
 					if(err) throw err;
 					console.log(row);
 					if(row.length == 0){
-						fileServer.addUser(db, para[0].split('=')[1], para[1].split('=')[1]);
+						fileServer.addUser(db, new_uri.query.email, new_uri.query.password);
 						resp.end('New Acccount');
 					}else{
 						resp.setHeader('exist_before', true);
-						resp.end(JSON.stringify(row));
+						httpHelpers.sendJson(resp, 200, row);
 					}
 					
 				});	
@@ -55,13 +51,12 @@ http.createServer(function(req, resp) {
 			var new_post_uri = url.parse(req.url);
 			if(new_post_uri.pathname == '/addcollection'){
 				// console.log(new_post_uri);
-				body = '';
-				req.on('data', function(chunk) {
-					body += chunk;
-				});
-				req.on('end', function() {
-					var parameters = qs.parse(body);
+				httpHelpers.readFormBody(req, function(parameters) {
 					// console.log(parameters);
+					if (!parameters.collection_name || !parameters.user_no) {
+						httpHelpers.sendError(resp, 400, 'collection_name and user_no are required');
+						return;
+					}
 					db.query("insert into collections (collection_name, user_no) values (?,?)", [parameters.collection_name, parameters.user_no], function (err, row) {
 						if(err) throw err;
 						var jsonresp = fileServer.listCollection(db, parameters.user_no, resp);
@@ -72,12 +67,7 @@ http.createServer(function(req, resp) {
 			}
 			if(new_post_uri.pathname == '/login'){
 				// console.log(new_post_uri);
-				body = '';
-				req.on('data', function(chunk) {
-					body += chunk;
-				});
-				req.on('end', function() {
-					var parameters = qs.parse(body);
+				httpHelpers.readFormBody(req, function(parameters) {
 					// console.log(parameters);
 					fileServer.login(db, parameters, resp);
 				});
@@ -85,13 +75,12 @@ http.createServer(function(req, resp) {
 			}
 			if(new_post_uri.pathname == '/listcollection'){
 				// console.log(new_post_uri);
-				body = '';
-				req.on('data', function(chunk) {
-					body += chunk;
-				});
-				req.on('end', function() {
-					var parameters = qs.parse(body);
+				httpHelpers.readFormBody(req, function(parameters) {
 					// console.log(parameters);
+					if (!parameters.user_no) {
+						httpHelpers.sendError(resp, 400, 'user_no is required');
+						return;
+					}
 					fileServer.listCollection(db, parameters.user_no, resp);
 				});
 				return;	
@@ -179,8 +168,7 @@ http.createServer(function(req, resp) {
 		default:
 			break;
 	}
-}).listen(3030 || process.env.PORT, function() {
-	console.log("Listening to 3030");
+}).listen(process.env.PORT || 3030, function() {
+	console.log("Listening to " + (process.env.PORT || 3030));
 });
 fileServer.printcwd("runing");
-
