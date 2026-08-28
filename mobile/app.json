@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "PhotoSync",
+    "slug": "photosync",
+    "scheme": "photosync",
+    "version": "0.2.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": ["expo-router"],
+    "ios": {"bundleIdentifier": "com.aiautotool.photosync", "supportsTablet": true},
+    "android": {"package": "com.aiautotool.photosync", "adaptiveIcon": {"backgroundColor": "#090d12"}}
+  }
+}
