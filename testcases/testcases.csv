@@ -1,0 +1,61 @@
+ID,Area,Priority,Title,Preconditions,Steps,Expected
+TC-001,Mobile,P0,First launch permission,Fresh install,Open app and grant full photo permission,Permission FULL and discovery starts
+TC-002,Mobile,P0,Permission denied,Fresh install,Open app and deny permission,Explain limitation and no crash
+TC-003,Sync,P0,Exact duplicate,Same SHA256 and size protected,Queue identical file,No second physical upload
+TC-004,Storage,P0,App cap exact boundary,appUsed 9GiB file 1GiB,Allocate,Allowed resulting app usage 10GiB
+TC-005,Storage,P0,App cap overflow,appUsed 9GiB file 2GiB,Allocate,Rejected for account
+TC-006,Storage,P0,Reserve exact boundary,providerFree 6GiB file 1GiB,Allocate,Allowed and 5GiB remains
+TC-007,Storage,P0,Reserve violation,providerFree 6GiB file 2GiB,Allocate,Rejected for account
+TC-008,Storage,P0,Whole file rollover,A safe 500MiB B safe 5GiB file 1GiB,Allocate,Entire file goes to B
+TC-009,Storage,P0,No safe capacity,All safe capacity below file,Allocate,BLOCKED_NO_CAPACITY
+TC-010,Storage,P1,Most safe capacity,Two eligible accounts,Allocate,Greatest safeAvailable selected
+TC-011,Auth,P0,OAuth revoke,Connected account,Revoke grant then sync,AUTH_REQUIRED no secret leaked
+TC-012,Auth,P0,Expired access token,Refresh token valid,Start sync,Token refreshed and job continues
+TC-013,Auth,P0,Refresh token invalid,Refresh token revoked,Start sync,Account AUTH_REQUIRED and jobs paused
+TC-014,Sync,P0,Network interruption,Upload running,Disable then restore network,Retry or resume without duplicate
+TC-015,Sync,P0,Process kill recovery,Persisted upload job,Kill and reopen,Queue restored
+TC-016,Sync,P0,Reboot recovery,Persisted queue,Reboot device,Queue resumes safely
+TC-017,Desktop,P0,Boot autostart,Autostart enabled,Reboot login,Agent starts sync cycle
+TC-018,Desktop,P1,Autostart disabled,Autostart disabled,Reboot login,Agent does not auto start
+TC-019,Restore,P0,Hash verification,Protected media exists,Restore,Hash equals indexed hash
+TC-020,Restore,P0,Corrupt download,Download bytes corrupted,Verify,Restore fails and retries
+TC-021,Security,P0,Path traversal filename,Remote name ../x.jpg,Restore,Sanitized inside target folder
+TC-022,Security,P0,Token log redaction,OAuth token exists,Trigger errors inspect logs,No token in logs
+TC-023,Quota,P0,External Gmail usage,Account previously safe,Consume quota externally refresh,Allocator uses fresh quota
+TC-024,Quota,P0,Account already below reserve,providerFree below 5GiB,Refresh account,RESERVE_BLOCKED
+TC-025,Video,P1,Large resumable video,Large video,Interrupt after partial upload,Resume checkpoint
+TC-026,Media,P1,HEIC original,HEIC available,Backup and restore,Original bytes preserved
+TC-027,Media,P1,Live Photo pair,iOS Live Photo available,Backup,Associated resources remain linked
+TC-028,Media,P1,Video metadata,Video with duration metadata,Backup restore,Duration and creation time indexed
+TC-029,Settings,P1,WiFi only,WiFi only enabled use cellular,Queue new media,No upload until WiFi
+TC-030,Settings,P1,Charging only,Charging only enabled unplugged,Queue new media,Upload waits for charging
+TC-031,Storage,P0,Ten GiB already reached,appUsed exactly 10GiB,Allocate 1 byte,Rejected APP_FULL
+TC-032,Storage,P0,Five GiB free exactly,providerFree exactly 5GiB,Allocate 1 byte,Rejected to protect reserve
+TC-033,Storage,P0,One byte under cap,appUsed 10GiB minus 1 byte file 1 byte enough free,Allocate,Allowed exactly to cap
+TC-034,Storage,P0,One byte over cap,appUsed 10GiB minus 1 file 2 bytes,Allocate,Rejected
+TC-035,Storage,P0,One byte reserve edge,providerFree 5GiB plus 1 byte file 1 byte,Allocate,Allowed exactly to reserve
+TC-036,Storage,P0,One byte reserve overflow,providerFree 5GiB plus 1 file 2 bytes,Allocate,Rejected
+TC-037,Dedupe,P0,Same name different content,Two files same name different hash,Backup both,Both stored separately
+TC-038,Dedupe,P0,Different name same content,Same hash size different names,Backup second,No duplicate blob
+TC-039,Sync,P1,Retry backoff,Provider transient 500,Run upload,Retries with bounded backoff
+TC-040,Sync,P1,Permanent provider error,Provider returns permission error,Run upload,Job fails actionable auth status
+TC-041,Desktop,P1,Local folder missing,Mirror target removed,Sync,Prompts or recreates according policy no data loss
+TC-042,Desktop,P1,Disk full,Local disk has insufficient space,Download,Job pauses with disk capacity error
+TC-043,Desktop,P1,Duplicate local file,Correct hash already local,Mirror sync,Skip redundant download
+TC-044,Desktop,P1,Wrong local file,Same filename wrong hash,Mirror sync,Do not overwrite silently use safe conflict policy
+TC-045,Metadata,P1,Creation timestamp,EXIF creation time exists,Backup,Original creation time indexed
+TC-046,Metadata,P1,GPS privacy,EXIF GPS exists diagnostics off,Generate logs,GPS not leaked to logs
+TC-047,Security,P0,OAuth state mismatch,Malicious callback state,Complete OAuth,Reject callback
+TC-048,Security,P0,Secret committed scan,OAuth secret fixture staged,Run CI secret scan,Build blocks secret exposure
+TC-049,UI,P2,Screen reader labels,Mobile home screen,Run accessibility inspection,Primary controls labelled
+TC-050,UI,P2,Keyboard navigation,Desktop app,Use keyboard only,Primary actions reachable
+TC-051,Reliability,P1,10000 queue items,Large media library,Discover and queue,No lost jobs stable pagination
+TC-052,Reliability,P1,Concurrent quota change,Another device uploads during allocation,Commit upload,Capacity revalidated before unsafe write
+TC-053,Reliability,P1,Clock skew,Device clock incorrect,Sync,Server/provider ordering not corrupted
+TC-054,Account,P1,Add second Google account,One account connected,OAuth another,Two independent accounts listed
+TC-055,Account,P1,Remove account no pending jobs,Account idle,Remove,Credentials removed index retained safely
+TC-056,Account,P0,Remove account with only copy,Media only on account,Remove,Warn and prevent accidental orphaning
+TC-057,Restore,P1,Restore from nonprimary account,Media stored in second account,Restore,Resolver fetches correct remote id
+TC-058,Sync,P1,Offline discovery,Phone offline,Take/import media,Assets queue locally and upload later
+TC-059,Sync,P1,App background resume,Queued media exists,Background opportunity occurs,Eligible jobs progress within OS limits
+TC-060,E2E,P0,Capture to desktop mirror,All components configured,Capture photo backup then desktop sync,Desktop original hash matches phone source
