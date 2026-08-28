@@ -1,0 +1,17 @@
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+mobile/ios/Pods/
+mobile/android/.gradle/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+.idea/
+.vscode/
+.DS_Store
+.env
+.env.*
+!*.example
+**/google-services.json
+**/GoogleService-Info.plist
+**/*client_secret*.json
