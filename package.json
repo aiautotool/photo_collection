@@ -1,19 +1,13 @@
 {
-  "name": "photo_collection",
-  "version": "1.0.0",
-  "main": "server.js",
+  "name": "photosync-suite",
+  "private": true,
+  "version": "0.2.0",
+  "packageManager": "npm@11",
+  "workspaces": ["mobile", "desktop", "packages/*"],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
-  },
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "connect": "^3.6.6",
-    "formidable": "^1.2.1",
-    "mkdirp": "^0.5.1",
-    "mysql": "^2.16.0"
-  },
-  "devDependencies": {},
-  "description": ""
+    "mobile": "npm --workspace mobile run start",
+    "desktop": "npm --workspace desktop run dev",
+    "test": "npm --workspace @photosync/core test",
+    "typecheck": "npm --workspaces run typecheck --if-present"
+  }
 }
