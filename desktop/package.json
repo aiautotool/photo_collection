@@ -1,9 +1,15 @@
 {
-  "name": "photosync-desktop",
+  "name": "@photosync/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "scripts": {"dev":"vite","build":"tsc && vite build","tauri":"tauri"},
-  "dependencies": {"@tauri-apps/api":"^2.0.0","react":"^18.3.1","react-dom":"^18.3.1"},
-  "devDependencies": {"@tauri-apps/cli":"^2.0.0","@types/react":"^18.3.3","@types/react-dom":"^18.3.0","typescript":"^5.6.2","vite":"^5.4.8"}
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"npm:electron:dev\"",
+    "electron:dev": "wait-on http://localhost:5173 && tsc -p tsconfig.electron.json && electron .",
+    "build": "vite build && tsc -p tsconfig.electron.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {"@photosync/core":"*","react":"^19.2.3","react-dom":"^19.2.3"},
+  "devDependencies": {"@types/node":"^24.3.0","@types/react":"^19.2.0","@types/react-dom":"^19.2.0","@vitejs/plugin-react":"^5.0.0","concurrently":"^9.2.0","electron":"^44.0.0","typescript":"^5.9.2","vite":"^7.1.0","wait-on":"^8.0.4"}
 }
