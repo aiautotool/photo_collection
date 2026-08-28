@@ -28,9 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   final accounts = [
-    StorageAccount(id: '1', email: 'khanh@gmail.com', appUsedBytes: 8.2 * StoragePolicy.gib, providerFreeBytes: 6.8 * StoragePolicy.gib),
-    StorageAccount(id: '2', email: 'khanh.work@gmail.com', appUsedBytes: 4.1 * StoragePolicy.gib, providerFreeBytes: 10.9 * StoragePolicy.gib),
-    StorageAccount(id: '3', email: 'backup.family@gmail.com', appUsedBytes: 2.7 * StoragePolicy.gib, providerFreeBytes: 12.3 * StoragePolicy.gib),
+    StorageAccount(id: '1', email: 'khanh@gmail.com', appUsedBytes: (8.2 * StoragePolicy.gib).round(), providerFreeBytes: (6.8 * StoragePolicy.gib).round()),
+    StorageAccount(id: '2', email: 'khanh.work@gmail.com', appUsedBytes: (4.1 * StoragePolicy.gib).round(), providerFreeBytes: (10.9 * StoragePolicy.gib).round()),
+    StorageAccount(id: '3', email: 'backup.family@gmail.com', appUsedBytes: (2.7 * StoragePolicy.gib).round(), providerFreeBytes: (12.3 * StoragePolicy.gib).round()),
   ];
 
   @override
@@ -72,7 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(title, style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800, letterSpacing: -.5)),
                 if (subtitle != null) ...[
                   const SizedBox(height: 3),
-                  Text(subtitle, style: TextStyle(color: Colors.white.withValues(alpha: .55), fontSize: 12)),
+                  Text(subtitle, style: TextStyle(color: Colors.white.withOpacity(.55), fontSize: 12)),
                 ]
               ],
             ),
@@ -108,7 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Row(children: [
                   const Icon(Icons.search, color: Color(0xFF9AA7B5)),
                   const SizedBox(width: 10),
-                  Text('Tìm trong ảnh của bạn', style: TextStyle(color: Colors.white.withValues(alpha: .55))),
+                  Text('Tìm trong ảnh của bạn', style: TextStyle(color: Colors.white.withOpacity(.55))),
                   const Spacer(),
                   const Icon(Icons.tune_rounded, size: 18, color: Color(0xFF9AA7B5)),
                 ]),
@@ -310,7 +310,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Text('${used.toStringAsFixed(1)} / 10 GB', style: const TextStyle(fontSize: 12, color: Color(0xFFB9C5D1))),
                   ]),
                   const SizedBox(height: 10),
-                  ClipRRect(borderRadius: BorderRadius.circular(10), child: LinearProgressIndicator(value: (used / 10).clamp(0, 1), minHeight: 6, backgroundColor: const Color(0xFF26313D))),
+                  ClipRRect(borderRadius: BorderRadius.circular(10), child: LinearProgressIndicator(value: (used / 10).clamp(0, 1).toDouble(), minHeight: 6, backgroundColor: const Color(0xFF26313D))),
                   const SizedBox(height: 8),
                   Text('Có thể sao lưu thêm ${safe.toStringAsFixed(1)} GB • Luôn chừa 5 GB', style: const TextStyle(fontSize: 11, color: Color(0xFF7F8C99))),
                 ]),
