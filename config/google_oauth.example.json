@@ -1,0 +1,12 @@
+{
+  "androidClientId": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com",
+  "iosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
+  "windowsClientId": "YOUR_WINDOWS_DESKTOP_CLIENT_ID.apps.googleusercontent.com",
+  "macosClientId": "YOUR_MACOS_DESKTOP_CLIENT_ID.apps.googleusercontent.com",
+  "scopes": [
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/drive.file"
+  ]
+}
