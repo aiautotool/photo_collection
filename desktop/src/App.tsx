@@ -1,26 +1,84 @@
-import { useMemo, useState } from 'react';
-import { formatGiB, safeAvailable, type StorageAccount } from '@photosync/core';
+import { useEffect, useMemo, useState } from 'react';
 
-type NavItem={label:string,icon:string};
-const nav:NavItem[]=[{label:'Tổng quan',icon:'⌂'},{label:'Ảnh',icon:'▣'},{label:'Thư viện',icon:'◫'},{label:'Album',icon:'▤'},{label:'Chia sẻ',icon:'↗'},{label:'Địa điểm',icon:'⌖'},{label:'Mọi người',icon:'◉'},{label:'Thư mục',icon:'□'},{label:'Tài khoản lưu trữ',icon:'◈'},{label:'Cài đặt',icon:'⚙'}];
-const photos=Array.from({length:24},(_,i)=>`https://picsum.photos/seed/photosync-desktop-${i+1}/900/700`);
-const accounts:StorageAccount[]=[
-{id:'1',email:'khanh@gmail.com',appUsedBytes:8.2*1024**3,providerFreeBytes:6.8*1024**3},
-{id:'2',email:'khanh.work@gmail.com',appUsedBytes:4.1*1024**3,providerFreeBytes:10.9*1024**3},
-{id:'3',email:'backup.family@gmail.com',appUsedBytes:2.7*1024**3,providerFreeBytes:12.3*1024**3},
-];
+type LocalMedia = { name: string; path: string; url: string; modifiedAt: string };
+type SyncStatus = { state: 'idle'|'connecting'|'syncing'|'error'; connected?: boolean; downloaded: number; skipped: number; message?: string; downloadDir?: string; lastRunAt?: string };
+type DesktopBridge = {
+  connectGoogle(): Promise<SyncStatus>;
+  syncNow(): Promise<SyncStatus>;
+  getStatus(): Promise<SyncStatus>;
+  listLocalMedia(): Promise<LocalMedia[]>;
+  openDownloads(): Promise<void>;
+  onDownloaded(cb:(event:{name:string;path:string})=>void):()=>void;
+};
+
+declare global { interface Window { photoSyncDesktop?: DesktopBridge } }
+
+const nav=[['⌂','Tổng quan'],['▣','Ảnh'],['▤','Album'],['↗','Chia sẻ'],['⌖','Địa điểm'],['◉','Mọi người'],['□','Thư mục'],['◈','Tài khoản lưu trữ'],['⚙','Cài đặt']];
 
 export function App(){
- const[active,setActive]=useState('Ảnh'); const[query,setQuery]=useState(''); const[selected,setSelected]=useState<string|null>(null); const[showStorage,setShowStorage]=useState(true); const[showBackup,setShowBackup]=useState(false);
- const totalUsed=useMemo(()=>accounts.reduce((s,a)=>s+a.appUsedBytes,0),[]);
- return <div className="app-shell">
-  <aside className="sidebar"><div className="brand"><div className="brand-mark">P</div><div><b>PhotoSync</b><small>Drive Photo Cloud</small></div></div><nav>{nav.map(item=><button key={item.label} className={active===item.label?'nav-item active':'nav-item'} onClick={()=>setActive(item.label)}><span>{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-status"><span className="status-dot"/><div><b>Đồng bộ đang chạy</b><small>{accounts.length} tài khoản Google Drive</small></div></div></aside>
-  <main className="workspace"><header className="topbar"><div><h1>{active}</h1><p>Quản lý và sao lưu ảnh trên mọi thiết bị</p></div><div className="top-actions"><div className="search-box"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm ảnh, người, địa điểm..."/><kbd>⌘ K</kbd></div><button className="icon-btn">?</button><button className="avatar">KT</button></div></header>
-  <section className="toolbar"><div className="tabs"><button className="selected">Tất cả</button><button>Năm</button><button>Tháng</button><button>Ngày</button><button>Thư mục</button></div><div className="view-actions"><button>⌕</button><button>▦</button><button>⋯</button></div></section>
-  <section className="content-area"><div className="gallery-pane"><div className="date-heading"><div><h3>Tháng 5 2024</h3><span>{photos.length} mục</span></div><button>Chọn</button></div><div className="photo-grid">{photos.map((src,i)=><button className="photo-card" key={src} onClick={()=>setSelected(src)}><img src={src} alt={`Photo ${i+1}`}/><span className="photo-check">✓</span></button>)}</div></div>
-  <aside className="right-rail"><div className="panel storage-panel"><div className="panel-head"><div><h3>Tài khoản lưu trữ</h3><p>Google Drive pool</p></div><button onClick={()=>setShowStorage(v=>!v)}>⌃</button></div>{showStorage&&<><div className="account-list">{accounts.map(a=>{const used=a.appUsedBytes/1024**3;return <div className="account" key={a.id}><div className="google">G</div><div className="account-info"><div><b>{a.email}</b><span>{used.toFixed(1)} / 10 GB</span></div><div className="progress"><i style={{width:`${Math.min(used/10*100,100)}%`}}/></div><small>Có thể dùng an toàn: {formatGiB(safeAvailable(a))}</small></div></div>})}</div><button className="add-account">＋ Thêm tài khoản Google</button><div className="storage-summary"><div><span>Tổng PhotoSync đã dùng</span><b>{formatGiB(totalUsed)} <small>/ {accounts.length*10} GB</small></b></div><div className="multi-progress"><i style={{width:`${Math.min(totalUsed/(accounts.length*10*1024**3)*100,100)}%`}}/></div><small>Mỗi tài khoản luôn chừa tối thiểu 5 GB</small></div></>}</div>
-  <div className="panel backup-panel"><div className="panel-head"><div><h3>Sao lưu</h3><p>Tự động & an toàn</p></div><label className="switch"><input type="checkbox" defaultChecked/><span/></label></div><button className="backup-option" onClick={()=>setShowBackup(v=>!v)}><div><b>Ảnh & Video</b><small>Chất lượng gốc</small></div><span>›</span></button>{showBackup&&<div className="backup-detail"><label><input type="checkbox" defaultChecked/> Ảnh</label><label><input type="checkbox" defaultChecked/> Video</label><label><input type="checkbox" defaultChecked/> Live Photos</label></div>}<label className="check-row"><input type="checkbox" defaultChecked/> Chỉ dùng Wi‑Fi</label><label className="check-row"><input type="checkbox" defaultChecked/> Chạy khi khởi động máy</label></div>
-  <div className="panel activity-panel"><div className="panel-head"><div><h3>Hoạt động gần đây</h3><p>Đồng bộ trực tiếp</p></div><span className="live-dot"/></div>{[0,1,2].map(i=><div className="activity" key={i}><img src={photos[i]} alt="thumb"/><div><b>IMG_20240512_{String(i+1).padStart(4,'0')}.jpg</b><small>Đã tải lên • {i+2} phút trước</small></div><span>✓</span></div>)}<button className="sync-now" onClick={()=>alert('Đã đưa tác vụ đồng bộ vào hàng đợi')}>Chạy đồng bộ ngay</button></div></aside></section></main>
-  {selected&&<div className="viewer" onClick={()=>setSelected(null)}><div className="viewer-top"><button>‹</button><div><b>Đà Lạt, Việt Nam</b><small>12 tháng 5, 2024 • 06:45</small></div><span/><button>⋯</button></div><img src={selected} alt="Selected"/><div className="viewer-actions"><button>↗<small>Chia sẻ</small></button><button>♡<small>Yêu thích</small></button><button>◒<small>Chỉnh sửa</small></button><button>⌫<small>Xóa</small></button></div></div>}
- </div>
+  const [active,setActive]=useState('Ảnh');
+  const [query,setQuery]=useState('');
+  const [media,setMedia]=useState<LocalMedia[]>([]);
+  const [status,setStatus]=useState<SyncStatus>({state:'idle',downloaded:0,skipped:0,message:'Đang kiểm tra...'});
+  const [selected,setSelected]=useState<LocalMedia|null>(null);
+
+  async function refresh(){
+    const bridge=window.photoSyncDesktop;
+    if(!bridge)return;
+    const [s,m]=await Promise.all([bridge.getStatus(),bridge.listLocalMedia()]);
+    setStatus(s); setMedia(m);
+  }
+
+  useEffect(()=>{
+    void refresh();
+    const bridge=window.photoSyncDesktop;
+    if(!bridge)return;
+    const off=bridge.onDownloaded(()=>void refresh());
+    const timer=setInterval(()=>void refresh(),10000);
+    return()=>{off();clearInterval(timer)};
+  },[]);
+
+  const filtered=useMemo(()=>media.filter(x=>x.name.toLowerCase().includes(query.toLowerCase())),[media,query]);
+  const busy=status.state==='syncing'||status.state==='connecting';
+
+  async function connect(){
+    const bridge=window.photoSyncDesktop; if(!bridge)return;
+    setStatus(s=>({...s,state:'connecting',message:'Đang mở Google...'}));
+    try{setStatus(await bridge.connectGoogle()); await refresh()}catch(e){setStatus(s=>({...s,state:'error',message:e instanceof Error?e.message:String(e)}))}
+  }
+
+  async function syncNow(){
+    const bridge=window.photoSyncDesktop; if(!bridge)return;
+    setStatus(s=>({...s,state:'syncing',message:'Đang đồng bộ...'}));
+    setStatus(await bridge.syncNow()); await refresh();
+  }
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><div className="brand-mark">P</div><div><b>PhotoSync</b><small>Google Drive Photo Cloud</small></div></div>
+      <nav>{nav.map(([icon,label])=><button key={label} className={active===label?'nav-item active':'nav-item'} onClick={()=>setActive(label)}><span>{icon}</span>{label}</button>)}</nav>
+      <div className="sidebar-status"><span className={`status-dot ${status.state==='error'?'error':''}`}/><div><b>{busy?'Đang đồng bộ':status.connected?'Đã kết nối':'Chưa kết nối'}</b><small>{status.message||'Google Drive'}</small></div></div>
+    </aside>
+
+    <main className="workspace">
+      <header className="topbar"><div><h1>{active}</h1><p>{media.length} ảnh/video trên máy • nguồn Google Drive</p></div><div className="top-actions"><div className="search-box"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm theo tên file..."/><kbd>⌘ K</kbd></div><button className="avatar">PS</button></div></header>
+      <section className="toolbar"><div className="tabs"><button className="selected">Tất cả</button><button>Năm</button><button>Tháng</button><button>Ngày</button><button onClick={()=>window.photoSyncDesktop?.openDownloads()}>Mở thư mục</button></div><div className="view-actions"><button onClick={()=>void syncNow()} disabled={busy}>↻</button><button>▦</button></div></section>
+
+      <section className="content-area">
+        <div className="gallery-pane">
+          <div className="date-heading"><div><h3>Thư viện PhotoSync</h3><span>{filtered.length} mục</span></div><button>Chọn</button></div>
+          {filtered.length===0?<div className="empty-state"><div className="empty-cloud">☁</div><h2>{status.connected?'Chưa có ảnh được tải về':'Kết nối Google Drive để bắt đầu'}</h2><p>{status.connected?'Bấm Đồng bộ ngay hoặc backup ảnh từ mobile.':'Sau khi kết nối, app tự kiểm tra ảnh mới mỗi 30 giây.'}</p><button className="sync-now" onClick={()=>status.connected?void syncNow():void connect()}>{status.connected?'Đồng bộ ngay':'Kết nối Google Drive'}</button></div>:
+          <div className="photo-grid">{filtered.map(item=><button className="photo-card" key={item.path} onClick={()=>setSelected(item)}><img src={item.url} alt={item.name}/><span className="photo-name">{item.name}</span></button>)}</div>}
+        </div>
+
+        <aside className="right-rail">
+          <div className="panel storage-panel"><div className="panel-head"><div><h3>Google Drive</h3><p>Kho lưu trữ PhotoSync</p></div><span className={status.connected?'live-dot':'status-dot'}/></div><div className="drive-account"><div className="google">G</div><div><b>{status.connected?'Đã đăng nhập':'Chưa đăng nhập'}</b><small>{status.downloadDir||'Pictures/PhotoSync'}</small></div></div><button className="add-account" onClick={()=>void connect()}>＋ {status.connected?'Đổi tài khoản Google':'Kết nối Google Drive'}</button></div>
+          <div className="panel backup-panel"><div className="panel-head"><div><h3>Đồng bộ về máy</h3><p>Tự động mỗi 30 giây</p></div><label className="switch"><input type="checkbox" checked={status.connected} readOnly/><span/></label></div><div className="sync-stat"><span>Trạng thái</span><b>{busy?'Đang chạy':status.state==='error'?'Có lỗi':'Sẵn sàng'}</b></div><div className="sync-stat"><span>Lần gần nhất</span><b>{status.lastRunAt?new Date(status.lastRunAt).toLocaleTimeString():'—'}</b></div><button className="sync-now" onClick={()=>void syncNow()} disabled={!status.connected||busy}>{busy?'Đang đồng bộ...':'Đồng bộ ngay'}</button></div>
+          <div className="panel activity-panel"><div className="panel-head"><div><h3>Hoạt động</h3><p>Drive → Laptop</p></div><span className="live-dot"/></div><div className="activity-summary"><b>{status.downloaded}</b><span>file mới tải ở lần gần nhất</span></div><div className="activity-summary"><b>{status.skipped}</b><span>file đã có trên máy</span></div><button className="backup-option" onClick={()=>window.photoSyncDesktop?.openDownloads()}><div><b>Mở Pictures/PhotoSync</b><small>Xem file gốc trên máy</small></div><span>›</span></button></div>
+        </aside>
+      </section>
+    </main>
+
+    {selected&&<div className="viewer" onClick={()=>setSelected(null)}><div className="viewer-top"><button>‹</button><div><b>{selected.name}</b><small>{new Date(selected.modifiedAt).toLocaleString()}</small></div><span/><button>⋯</button></div><img src={selected.url} alt={selected.name}/><div className="viewer-actions"><button>♡<small>Yêu thích</small></button><button onClick={e=>{e.stopPropagation();window.photoSyncDesktop?.openDownloads()}}>□<small>Mở thư mục</small></button></div></div>}
+  </div>
 }
