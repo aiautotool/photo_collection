@@ -5,17 +5,18 @@ import { loadDevicePhotos, pingLaptop, syncAssetsToLaptop } from './mobileSync';
 
 const TASK = 'photosync-background-sync-v1';
 
+export async function runPairedSync() {
+  const target = await loadPairedDesktop();
+  if (!target) return false;
+  await pingLaptop(target);
+  const assets = await loadDevicePhotos(300);
+  await syncAssetsToLaptop(target, assets);
+  return true;
+}
+
 TaskManager.defineTask(TASK, async () => {
-  try {
-    const target = await loadPairedDesktop();
-    if (!target) return BackgroundTask.BackgroundTaskResult.Success;
-    await pingLaptop(target);
-    const assets = await loadDevicePhotos(300);
-    await syncAssetsToLaptop(target, assets);
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Success;
-  }
+  try { await runPairedSync(); } catch {}
+  return BackgroundTask.BackgroundTaskResult.Success;
 });
 
 export async function registerBackgroundSync() {
