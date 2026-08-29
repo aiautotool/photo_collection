@@ -3,13 +3,14 @@
     "name": "PhotoSync",
     "slug": "photosync",
     "scheme": "photosync",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "plugins": [
       "expo-router",
       ["expo-camera", {"cameraPermission": "Cho phép PhotoSync dùng camera để quét QR ghép nối với laptop."}],
       ["expo-secure-store", {"configureAndroidBackup": true}],
+      ["expo-notifications", {"enableBackgroundRemoteNotifications": true}],
       ["expo-build-properties", {"android": {"usesCleartextTraffic": true}}]
     ],
     "ios": {
@@ -18,7 +19,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "PhotoSync dùng camera để quét QR ghép nối với laptop.",
         "NSPhotoLibraryUsageDescription": "PhotoSync cần đọc ảnh và video để đồng bộ sang laptop của bạn.",
-        "UIBackgroundModes": ["processing"]
+        "UIBackgroundModes": ["processing", "remote-notification"]
       }
     },
     "android": {
