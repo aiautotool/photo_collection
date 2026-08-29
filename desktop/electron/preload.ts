@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('photoSyncDesktop', {
   platform: process.platform,
   version: process.versions.electron,
   getStatus: () => ipcRenderer.invoke('photosync:status'),
+  getTunnelStatus: () => ipcRenderer.invoke('photosync:tunnel-status'),
   listLocalMedia: () => ipcRenderer.invoke('photosync:list-local'),
   openLibrary: () => ipcRenderer.invoke('photosync:open-library'),
   addGoogleAccount: () => ipcRenderer.invoke('photosync:add-google'),
@@ -17,5 +18,10 @@ contextBridge.exposeInMainWorld('photoSyncDesktop', {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
     ipcRenderer.on('photosync:storage-updated', handler);
     return () => ipcRenderer.removeListener('photosync:storage-updated', handler);
+  },
+  onTunnelState: (callback: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+    ipcRenderer.on('photosync:tunnel-state', handler);
+    return () => ipcRenderer.removeListener('photosync:tunnel-state', handler);
   },
 });
