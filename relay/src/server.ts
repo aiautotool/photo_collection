@@ -4,15 +4,18 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, type WebSocket as WebSocketType } from 'ws';
 
 const PORT = Number(process.env.PORT || 8787);
 const UPLOAD_TTL_MS = 30 * 60_000;
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 20 * 1024 ** 3);
 const tempRoot = path.join(os.tmpdir(), 'photosync-relay');
-await fsp.mkdir(tempRoot, { recursive: true });
+const dataRoot = process.env.PHOTOSYNC_RELAY_DATA_DIR || path.join(process.cwd(), '.photosync-relay-data');
+const pushFile = path.join(dataRoot, 'push-subscriptions.json');
+await Promise.all([fsp.mkdir(tempRoot, { recursive: true }), fsp.mkdir(dataRoot, { recursive: true })]);
 
-type Host = { socket: WebSocket; hostSecret: string; connectedAt: number };
+type Host = { socket: WebSocketType; hostSecret: string; connectedAt: number };
+type PushSubscription = { desktopId: string; deviceId: string; expoPushToken: string; pairTokenHash: string };
 type Pending = {
   id: string;
   desktopId: string;
@@ -30,6 +33,7 @@ type Pending = {
 
 const hosts = new Map<string, Host>();
 const pending = new Map<string, Pending>();
+let pushSubscriptions: PushSubscription[] = await fsp.readFile(pushFile, 'utf8').then(x => JSON.parse(x) as PushSubscription[]).catch(() => []);
 
 function json(res: http.ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' });
@@ -37,7 +41,45 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
 }
 
 function clean(value: string | undefined, fallback = '') {
-  return (value || fallback).replace(/[\r\n]/g, '').slice(0, 2048);
+  return (value || fallback).replace(/[\r\n]/g, '').slice(0, 4096);
+}
+
+function hash(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+async function readJsonBody(req: http.IncomingMessage, max = 16 * 1024) {
+  let raw = '';
+  for await (const chunk of req) {
+    raw += chunk.toString('utf8');
+    if (raw.length > max) throw new Error('JSON body too large');
+  }
+  return JSON.parse(raw || '{}') as Record<string, unknown>;
+}
+
+async function savePushSubscriptions() {
+  await fsp.writeFile(pushFile, JSON.stringify(pushSubscriptions, null, 2), 'utf8');
+}
+
+async function notifyDesktopOnline(desktopId: string) {
+  const tokens = [...new Set(pushSubscriptions.filter(x => x.desktopId === desktopId).map(x => x.expoPushToken))];
+  if (!tokens.length) return;
+  try {
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(tokens.map(to => ({
+        to,
+        data: { type: 'photosync.desktop-online', desktopId },
+        contentAvailable: true,
+        priority: 'high',
+        ttl: 300,
+      }))),
+    });
+    if (!response.ok) console.error('Expo push failed', response.status, await response.text());
+  } catch (error) {
+    console.error('Expo push error', error);
+  }
 }
 
 async function deletePending(id: string) {
@@ -70,16 +112,30 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     if (req.method === 'GET' && url.pathname === '/health') {
-      return json(res, 200, { ok: true, onlineDesktops: hosts.size, pendingUploads: pending.size });
+      return json(res, 200, { ok: true, onlineDesktops: hosts.size, pendingUploads: pending.size, pushSubscriptions: pushSubscriptions.length });
     }
     if (req.method === 'GET' && url.pathname.startsWith('/api/v1/desktop/') && url.pathname.endsWith('/status')) {
       const desktopId = decodeURIComponent(url.pathname.split('/')[4] || '');
       return json(res, 200, { online: hosts.has(desktopId) });
     }
+    if (req.method === 'POST' && url.pathname.startsWith('/api/v1/pair/') && url.pathname.endsWith('/push')) {
+      const desktopId = decodeURIComponent(url.pathname.split('/')[4] || '');
+      const body = await readJsonBody(req);
+      const expoPushToken = clean(String(body.expoPushToken || ''));
+      const pairToken = clean(String(body.pairToken || ''));
+      const deviceId = clean(String(body.deviceId || ''));
+      if (!desktopId || !expoPushToken || !pairToken || !deviceId) return json(res, 400, { ok: false, error: 'Missing pairing push fields' });
+      if (!/^(ExponentPushToken|ExpoPushToken)\[.+\]$/.test(expoPushToken)) return json(res, 400, { ok: false, error: 'Invalid Expo push token' });
+      const pairTokenHash = hash(pairToken);
+      pushSubscriptions = pushSubscriptions.filter(x => !(x.desktopId === desktopId && x.deviceId === deviceId));
+      pushSubscriptions.push({ desktopId, deviceId, expoPushToken, pairTokenHash });
+      await savePushSubscriptions();
+      return json(res, 200, { ok: true });
+    }
     if (req.method === 'POST' && url.pathname.startsWith('/api/v1/upload/')) {
       const desktopId = decodeURIComponent(url.pathname.split('/')[4] || '');
       const host = hosts.get(desktopId);
-      if (!host || host.socket.readyState !== host.socket.OPEN) return json(res, 503, { ok: false, error: 'Laptop offline' });
+      if (!host || host.socket.readyState !== WebSocket.OPEN) return json(res, 503, { ok: false, error: 'Laptop offline' });
 
       const size = Number(req.headers['content-length'] || 0);
       if (!Number.isFinite(size) || size <= 0 || size > MAX_UPLOAD_BYTES) return json(res, 413, { ok: false, error: 'Invalid or too large upload' });
@@ -91,10 +147,7 @@ const server = http.createServer(async (req, res) => {
       await new Promise<void>((resolve, reject) => {
         req.on('data', chunk => {
           written += chunk.length;
-          if (written > MAX_UPLOAD_BYTES) {
-            req.destroy(new Error('Upload too large'));
-            return;
-          }
+          if (written > MAX_UPLOAD_BYTES) req.destroy(new Error('Upload too large'));
         });
         req.pipe(file);
         file.on('finish', resolve);
@@ -178,9 +231,10 @@ server.on('upgrade', (req, socket, head) => {
     if (!desktopId || !hostSecret) return socket.destroy();
     wss.handleUpgrade(req, socket, head, ws => {
       const old = hosts.get(desktopId);
-      if (old && old.hostSecret !== hostSecret && old.socket.readyState === old.socket.OPEN) return ws.close(4001, 'desktop id already online');
+      if (old && old.hostSecret !== hostSecret && old.socket.readyState === WebSocket.OPEN) return ws.close(4001, 'desktop id already online');
       hosts.set(desktopId, { socket: ws, hostSecret, connectedAt: Date.now() });
       ws.send(JSON.stringify({ type: 'tunnel.ready', desktopId }));
+      void notifyDesktopOnline(desktopId);
       ws.on('close', () => {
         const current = hosts.get(desktopId);
         if (current?.socket === ws) hosts.delete(desktopId);
