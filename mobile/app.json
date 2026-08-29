@@ -8,6 +8,7 @@
     "userInterfaceStyle": "dark",
     "plugins": [
       "expo-router",
+      ["expo-media-library", {"photosPermission": "PhotoSync cần đọc ảnh và video để đồng bộ sang laptop."}],
       ["expo-camera", {"cameraPermission": "Cho phép PhotoSync dùng camera để quét QR ghép nối với laptop."}],
       ["expo-secure-store", {"configureAndroidBackup": true}],
       ["expo-notifications", {"enableBackgroundRemoteNotifications": true}],
