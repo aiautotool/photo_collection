@@ -8,11 +8,41 @@
     "userInterfaceStyle": "dark",
     "plugins": [
       "expo-router",
-      ["expo-media-library", {"photosPermission": "PhotoSync cần đọc ảnh và video để đồng bộ sang laptop."}],
-      ["expo-camera", {"cameraPermission": "Cho phép PhotoSync dùng camera để quét QR ghép nối với laptop."}],
-      ["expo-secure-store", {"configureAndroidBackup": true}],
-      ["expo-notifications", {"enableBackgroundRemoteNotifications": true}],
-      ["expo-build-properties", {"android": {"usesCleartextTraffic": true}}]
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "PhotoSync cần đọc ảnh và video để đồng bộ sang laptop."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Cho phép PhotoSync dùng camera để quét QR ghép nối với laptop."
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-background-task",
+      "expo-image",
+      "expo-status-bar"
     ],
     "ios": {
       "bundleIdentifier": "com.aiautotool.photosync",
@@ -20,13 +50,22 @@
       "infoPlist": {
         "NSCameraUsageDescription": "PhotoSync dùng camera để quét QR ghép nối với laptop.",
         "NSPhotoLibraryUsageDescription": "PhotoSync cần đọc ảnh và video để đồng bộ sang laptop của bạn.",
-        "UIBackgroundModes": ["processing", "remote-notification"]
+        "UIBackgroundModes": [
+          "processing",
+          "remote-notification"
+        ]
       }
     },
     "android": {
       "package": "com.aiautotool.photosync",
-      "permissions": ["CAMERA", "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO"],
-      "adaptiveIcon": {"backgroundColor": "#090d12"}
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#090d12"
+      }
     }
   }
 }

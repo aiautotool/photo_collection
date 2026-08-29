@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.6.0",
   "packageManager": "npm@11",
+  "overrides": {
+    "react-native-reanimated": "4.5.0",
+    "react-native-worklets": "0.10.4"
+  },
   "workspaces": ["mobile", "desktop", "relay", "packages/*"],
   "scripts": {
     "postinstall": "npm --workspace @photosync/core run build && npm --workspace @photosync/google-drive run build",
