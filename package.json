@@ -1,12 +1,14 @@
 {
   "name": "photosync-suite",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "npm@11",
   "workspaces": ["mobile", "desktop", "packages/*"],
   "scripts": {
-    "mobile": "npm --workspace mobile run start",
-    "desktop": "npm --workspace desktop run dev",
+    "postinstall": "npm --workspace @photosync/google-drive run build",
+    "mobile": "npm --workspace @photosync/google-drive run build && npm --workspace @photosync/mobile run start",
+    "desktop": "npm --workspace @photosync/google-drive run build && npm --workspace @photosync/desktop run dev",
+    "build": "npm --workspace @photosync/google-drive run build && npm --workspace @photosync/desktop run build",
     "test": "npm --workspace @photosync/core test",
     "typecheck": "npm --workspaces run typecheck --if-present"
   }
