@@ -24,9 +24,11 @@ let configured = false;
 export function configureGoogleSignIn() {
   if (configured) return;
   const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+  const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
   if (!webClientId) throw new Error('Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID');
   GoogleSignin.configure({
     webClientId,
+    iosClientId,
     scopes: [DRIVE_SCOPE],
     offlineAccess: true,
     forceCodeForRefreshToken: true,
@@ -38,8 +40,10 @@ export async function signInGoogle() {
   configureGoogleSignIn();
   await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true }).catch(() => undefined);
   const result = await GoogleSignin.signIn();
+  if (!result.data) throw new Error('Đăng nhập Google đã bị hủy');
+  await GoogleSignin.addScopes({ scopes: [DRIVE_SCOPE] });
   const tokens = await GoogleSignin.getTokens();
-  return { accessToken: tokens.accessToken, user: result.data?.user ?? null };
+  return { accessToken: tokens.accessToken, user: result.data.user };
 }
 
 export async function currentGoogleAccessToken(): Promise<string | null> {
@@ -47,6 +51,7 @@ export async function currentGoogleAccessToken(): Promise<string | null> {
   try {
     const signed = await GoogleSignin.signInSilently();
     if (!signed.data) return null;
+    await GoogleSignin.addScopes({ scopes: [DRIVE_SCOPE] });
     return (await GoogleSignin.getTokens()).accessToken;
   } catch {
     return null;
@@ -129,7 +134,6 @@ export async function backupAssetsToDrive(
         progress.blockedByQuota = (progress.blockedByQuota || 0) + 1;
         continue;
       }
-
       const mimeType = mimeFor(asset);
       const sessionUri = await createResumableUploadSession(accessToken, {
         name: asset.filename,
@@ -156,7 +160,6 @@ export async function backupAssetsToDrive(
       onProgress?.({ ...progress });
     }
   }
-
   progress.current = undefined;
   onProgress?.({ ...progress });
   return progress;
