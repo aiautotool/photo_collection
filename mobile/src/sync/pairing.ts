@@ -1,5 +1,4 @@
 import * as SecureStore from 'expo-secure-store';
-import crypto from 'expo-crypto';
 
 export type PairedDesktop = {
   v: 1;
@@ -15,6 +14,10 @@ function normalizeRelayUrl(value: string) {
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Relay URL không hợp lệ');
   return url.toString().replace(/\/$/, '');
+}
+
+function newDeviceId() {
+  return `phone_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
 export function parsePairingQr(raw: string): Omit<PairedDesktop, 'deviceId'> {
@@ -34,7 +37,7 @@ export async function savePairedDesktop(rawQr: string): Promise<PairedDesktop> {
   const existing = await loadPairedDesktop();
   const target: PairedDesktop = {
     ...parsed,
-    deviceId: existing?.deviceId || `phone_${crypto.randomUUID()}`,
+    deviceId: existing?.deviceId || newDeviceId(),
   };
   await SecureStore.setItemAsync(KEY, JSON.stringify(target), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
   return target;
