@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('photoSyncDesktop', {
   connectGoogle: () => ipcRenderer.invoke('photosync:connect-google'),
   syncNow: () => ipcRenderer.invoke('photosync:sync-now'),
   getStatus: () => ipcRenderer.invoke('photosync:status'),
+  listLocalMedia: () => ipcRenderer.invoke('photosync:list-local'),
   openDownloads: () => ipcRenderer.invoke('photosync:open-downloads'),
   onDownloaded: (callback: (event: {name: string; path: string}) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: {name: string; path: string}) => callback(payload);
