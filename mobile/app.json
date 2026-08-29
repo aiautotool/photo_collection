@@ -3,11 +3,24 @@
     "name": "PhotoSync",
     "slug": "photosync",
     "scheme": "photosync",
-    "version": "0.2.0",
+    "version": "0.4.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "plugins": ["expo-router"],
-    "ios": {"bundleIdentifier": "com.aiautotool.photosync", "supportsTablet": true},
-    "android": {"package": "com.aiautotool.photosync", "adaptiveIcon": {"backgroundColor": "#090d12"}}
+    "plugins": [
+      "expo-router",
+      ["expo-build-properties", {"android": {"usesCleartextTraffic": true}}]
+    ],
+    "ios": {
+      "bundleIdentifier": "com.aiautotool.photosync",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "PhotoSync cần kết nối tới laptop của bạn để gửi ảnh và video trực tiếp trong mạng nội bộ.",
+        "NSAppTransportSecurity": {"NSAllowsLocalNetworking": true}
+      }
+    },
+    "android": {
+      "package": "com.aiautotool.photosync",
+      "adaptiveIcon": {"backgroundColor": "#090d12"}
+    }
   }
 }
