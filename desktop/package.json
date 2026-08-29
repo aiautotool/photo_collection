@@ -1,7 +1,7 @@
 {
   "name": "@photosync/desktop",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,6 +10,12 @@
     "build": "vite build && tsc -p tsconfig.electron.json",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {"@photosync/core":"*","react":"^19.2.3","react-dom":"^19.2.3"},
+  "dependencies": {
+    "@photosync/core":"*",
+    "@photosync/google-drive":"*",
+    "google-auth-library":"^10.3.0",
+    "react":"^19.2.3",
+    "react-dom":"^19.2.3"
+  },
   "devDependencies": {"@types/node":"^24.3.0","@types/react":"^19.2.0","@types/react-dom":"^19.2.0","@vitejs/plugin-react":"^5.0.0","concurrently":"^9.2.0","electron":"^44.0.0","typescript":"^5.9.2","vite":"^7.1.0","wait-on":"^8.0.4"}
 }
