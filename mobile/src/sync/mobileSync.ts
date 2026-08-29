@@ -1,10 +1,12 @@
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
+import { safeAvailable, type StorageAccount } from '@photosync/core';
 import {
   DRIVE_SCOPE,
   createResumableUploadSession,
   ensurePhotoSyncFolder,
+  getStorageQuota,
   listPhotoSyncFiles,
 } from '@photosync/google-drive';
 
@@ -13,6 +15,7 @@ export type BackupProgress = {
   completed: number;
   skipped: number;
   failed: number;
+  blockedByQuota?: number;
   current?: string;
 };
 
@@ -21,9 +24,7 @@ let configured = false;
 export function configureGoogleSignIn() {
   if (configured) return;
   const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-  if (!webClientId) {
-    throw new Error('Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID');
-  }
+  if (!webClientId) throw new Error('Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID');
   GoogleSignin.configure({
     webClientId,
     scopes: [DRIVE_SCOPE],
@@ -38,10 +39,7 @@ export async function signInGoogle() {
   await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true }).catch(() => undefined);
   const result = await GoogleSignin.signIn();
   const tokens = await GoogleSignin.getTokens();
-  return {
-    accessToken: tokens.accessToken,
-    user: result.data?.user ?? null,
-  };
+  return { accessToken: tokens.accessToken, user: result.data?.user ?? null };
 }
 
 export async function currentGoogleAccessToken(): Promise<string | null> {
@@ -84,8 +82,6 @@ async function materializeAsset(asset: MediaLibrary.Asset): Promise<{ uri: strin
   const originalUri = info.localUri || info.uri || asset.uri;
   let uri = originalUri;
   let temporary = false;
-
-  // Drive upload requires a file:// URI. iOS media library can return ph://.
   if (!uri.startsWith('file://')) {
     const cacheDir = `${FileSystem.cacheDirectory}photosync-upload/`;
     await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true });
@@ -93,7 +89,6 @@ async function materializeAsset(asset: MediaLibrary.Asset): Promise<{ uri: strin
     await FileSystem.copyAsync({ from: originalUri, to: uri });
     temporary = true;
   }
-
   const fsInfo = await FileSystem.getInfoAsync(uri);
   if (!fsInfo.exists || typeof fsInfo.size !== 'number') throw new Error(`Không đọc được file ${asset.filename}`);
   return { uri, size: fsInfo.size, temporary };
@@ -105,14 +100,20 @@ export async function backupAssetsToDrive(
   onProgress?: (progress: BackupProgress) => void,
 ): Promise<BackupProgress> {
   const folderId = await ensurePhotoSyncFolder(accessToken);
-  const remote = await listPhotoSyncFiles(accessToken, folderId);
+  const [remote, quota] = await Promise.all([
+    listPhotoSyncFiles(accessToken, folderId),
+    getStorageQuota(accessToken),
+  ]);
   const remoteNames = new Set(remote.map(file => file.name));
-  const progress: BackupProgress = { total: assets.length, completed: 0, skipped: 0, failed: 0 };
+  let appUsedBytes = remote.reduce((sum, file) => sum + Number(file.size || 0), 0);
+  const quotaLimit = Number(quota.limit || 0);
+  let providerFreeBytes = Math.max(0, quotaLimit - Number(quota.usage || 0));
+  const account: StorageAccount = { id: 'current', email: 'current', appUsedBytes, providerFreeBytes };
+  const progress: BackupProgress = { total: assets.length, completed: 0, skipped: 0, failed: 0, blockedByQuota: 0 };
 
   for (const asset of assets) {
     progress.current = asset.filename;
     onProgress?.({ ...progress });
-
     if (remoteNames.has(asset.filename)) {
       progress.skipped += 1;
       onProgress?.({ ...progress });
@@ -122,35 +123,36 @@ export async function backupAssetsToDrive(
     let materialized: Awaited<ReturnType<typeof materializeAsset>> | null = null;
     try {
       materialized = await materializeAsset(asset);
+      account.appUsedBytes = appUsedBytes;
+      account.providerFreeBytes = providerFreeBytes;
+      if (materialized.size > safeAvailable(account)) {
+        progress.blockedByQuota = (progress.blockedByQuota || 0) + 1;
+        continue;
+      }
+
       const mimeType = mimeFor(asset);
       const sessionUri = await createResumableUploadSession(accessToken, {
         name: asset.filename,
         mimeType,
         sizeBytes: materialized.size,
         folderId,
-        appProperties: {
-          photosyncAssetId: asset.id,
-          photosyncCreatedAt: String(asset.creationTime),
-        },
+        appProperties: { photosyncAssetId: asset.id, photosyncCreatedAt: String(asset.creationTime) },
       });
-
       const uploaded = await FileSystem.uploadAsync(sessionUri, materialized.uri, {
         httpMethod: 'PUT',
         uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
         headers: { 'Content-Type': mimeType },
       });
-      if (uploaded.status < 200 || uploaded.status >= 300) {
-        throw new Error(`Upload ${uploaded.status}: ${uploaded.body}`);
-      }
+      if (uploaded.status < 200 || uploaded.status >= 300) throw new Error(`Upload ${uploaded.status}: ${uploaded.body}`);
       remoteNames.add(asset.filename);
+      appUsedBytes += materialized.size;
+      providerFreeBytes = Math.max(0, providerFreeBytes - materialized.size);
       progress.completed += 1;
     } catch (error) {
       console.error('PhotoSync upload failed', asset.filename, error);
       progress.failed += 1;
     } finally {
-      if (materialized?.temporary) {
-        await FileSystem.deleteAsync(materialized.uri, { idempotent: true }).catch(() => undefined);
-      }
+      if (materialized?.temporary) await FileSystem.deleteAsync(materialized.uri, { idempotent: true }).catch(() => undefined);
       onProgress?.({ ...progress });
     }
   }
