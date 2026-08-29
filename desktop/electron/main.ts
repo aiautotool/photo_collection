@@ -1,9 +1,9 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, net, protocol, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import http from 'node:http';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { OAuth2Client } from 'google-auth-library';
@@ -13,6 +13,10 @@ import {
   ensurePhotoSyncFolder,
   listPhotoSyncFiles,
 } from '@photosync/google-drive';
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'photosync', privileges: { secure: true, standard: true, supportFetchAPI: true } },
+]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OAUTH_PORT = 53682;
@@ -24,13 +28,14 @@ let lastSync: SyncStatus = { state: 'idle', downloaded: 0, skipped: 0 };
 
 type SyncStatus = {
   state: 'idle' | 'connecting' | 'syncing' | 'error';
-  email?: string;
   downloaded: number;
   skipped: number;
   message?: string;
   downloadDir?: string;
   lastRunAt?: string;
 };
+
+type LocalMedia = { name: string; path: string; url: string; modifiedAt: string };
 
 function tokenFile() {
   return path.join(app.getPath('userData'), 'google-token.json');
@@ -72,6 +77,22 @@ async function accessToken(): Promise<string> {
   return token.token;
 }
 
+async function listLocalMedia(): Promise<LocalMedia[]> {
+  const dir = downloadDir();
+  await fs.mkdir(dir, { recursive: true });
+  const names = await fs.readdir(dir);
+  const mediaExt = /\.(jpe?g|png|webp|gif|heic|heif|mp4|mov|m4v)$/i;
+  const rows = await Promise.all(
+    names.filter(name => mediaExt.test(name)).map(async name => {
+      const full = path.join(dir, name);
+      const stat = await fs.stat(full);
+      const encoded = encodeURIComponent(name);
+      return { name, path: full, url: `photosync://media/${encoded}`, modifiedAt: stat.mtime.toISOString() };
+    }),
+  );
+  return rows.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+}
+
 async function connectGoogle(): Promise<SyncStatus> {
   lastSync = { ...lastSync, state: 'connecting', message: 'Đang mở Google...' };
   const client = oauthClient();
@@ -80,7 +101,6 @@ async function connectGoogle(): Promise<SyncStatus> {
     prompt: 'consent select_account',
     scope: [DRIVE_SCOPE, 'openid', 'email', 'profile'],
   });
-
   await shell.openExternal(url);
 
   return new Promise((resolve, reject) => {
@@ -119,7 +139,7 @@ async function downloadDriveFile(token: string, fileId: string, destination: str
 
 async function runSync(): Promise<SyncStatus> {
   const hasToken = await loadSavedToken();
-  if (!hasToken && !oauthClient().credentials.access_token) {
+  if (!hasToken && !oauth?.credentials.access_token) {
     return { state: 'idle', downloaded: 0, skipped: 0, message: 'Chưa kết nối Google Drive', downloadDir: downloadDir() };
   }
 
@@ -135,14 +155,15 @@ async function runSync(): Promise<SyncStatus> {
 
     for (const file of files) {
       if (file.mimeType === 'application/vnd.google-apps.folder') continue;
-      if (localNames.has(file.name)) {
+      const safeName = file.name.replace(/[\\/:*?"<>|]/g, '_');
+      if (localNames.has(safeName)) {
         skipped += 1;
         continue;
       }
-      const target = path.join(downloadDir(), file.name.replace(/[\\/:*?"<>|]/g, '_'));
+      const target = path.join(downloadDir(), safeName);
       await downloadDriveFile(token, file.id, target);
       downloaded += 1;
-      localNames.add(path.basename(target));
+      localNames.add(safeName);
       mainWindow?.webContents.send('photosync:file-downloaded', { name: file.name, path: target });
     }
 
@@ -191,11 +212,21 @@ ipcMain.handle('photosync:connect-google', () => connectGoogle());
 ipcMain.handle('photosync:sync-now', () => runSync());
 ipcMain.handle('photosync:status', async () => {
   const hasToken = await loadSavedToken();
-  return { ...lastSync, connected: hasToken || Boolean(oauthClient().credentials.access_token), downloadDir: downloadDir() };
+  return { ...lastSync, connected: hasToken || Boolean(oauth?.credentials.access_token), downloadDir: downloadDir() };
 });
+ipcMain.handle('photosync:list-local', () => listLocalMedia());
 ipcMain.handle('photosync:open-downloads', () => shell.openPath(downloadDir()));
 
 app.whenReady().then(async () => {
+  protocol.handle('photosync', request => {
+    const url = new URL(request.url);
+    if (url.hostname !== 'media') return new Response('Not found', { status: 404 });
+    const name = decodeURIComponent(url.pathname.replace(/^\//, ''));
+    const full = path.resolve(downloadDir(), name);
+    const root = path.resolve(downloadDir()) + path.sep;
+    if (!full.startsWith(root)) return new Response('Forbidden', { status: 403 });
+    return net.fetch(pathToFileURL(full).href);
+  });
   createWindow();
   if (await loadSavedToken()) startAutoSync();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
