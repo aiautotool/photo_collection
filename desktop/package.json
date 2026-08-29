@@ -30,7 +30,7 @@
     "@types/ws":"^8.18.1",
     "@vitejs/plugin-react":"^5.0.0",
     "concurrently":"^9.2.0",
-    "electron":"^44.0.0",
+    "electron":"44.0.0",
     "electron-builder":"^26.0.12",
     "typescript":"^5.9.2",
     "vite":"^7.1.0",
@@ -39,6 +39,7 @@
   "build": {
     "appId": "com.aiautotool.photosync.desktop",
     "productName": "PhotoSync",
+    "electronVersion": "44.0.0",
     "asar": true,
     "directories": {"output": "release"},
     "files": [
@@ -51,12 +52,8 @@
       "target": ["dmg", "zip"],
       "identity": null
     },
-    "dmg": {
-      "title": "PhotoSync ${version}"
-    },
-    "win": {
-      "target": ["nsis"]
-    },
+    "dmg": {"title": "PhotoSync ${version}"},
+    "win": {"target": ["nsis"]},
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
