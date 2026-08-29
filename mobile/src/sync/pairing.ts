@@ -40,6 +40,7 @@ export async function savePairedDesktop(rawQr: string): Promise<PairedDesktop> {
     deviceId: existing?.deviceId || newDeviceId(),
   };
   await SecureStore.setItemAsync(KEY, JSON.stringify(target), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
+  void import('./pushSync').then(m => m.registerPairingForPush(target)).catch(() => undefined);
   return target;
 }
 
