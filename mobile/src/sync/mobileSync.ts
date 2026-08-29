@@ -1,62 +1,19 @@
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
-import { safeAvailable, type StorageAccount } from '@photosync/core';
-import {
-  DRIVE_SCOPE,
-  createResumableUploadSession,
-  ensurePhotoSyncFolder,
-  getStorageQuota,
-  listPhotoSyncFiles,
-} from '@photosync/google-drive';
 
-export type BackupProgress = {
+export type LaptopTarget = {
+  baseUrl: string;
+  pairCode: string;
+  deviceId: string;
+};
+
+export type SyncProgress = {
   total: number;
   completed: number;
   skipped: number;
   failed: number;
-  blockedByQuota?: number;
   current?: string;
 };
-
-let configured = false;
-
-export function configureGoogleSignIn() {
-  if (configured) return;
-  const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-  const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
-  if (!webClientId) throw new Error('Thiếu EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID');
-  GoogleSignin.configure({
-    webClientId,
-    iosClientId,
-    scopes: [DRIVE_SCOPE],
-    offlineAccess: true,
-    forceCodeForRefreshToken: true,
-  });
-  configured = true;
-}
-
-export async function signInGoogle() {
-  configureGoogleSignIn();
-  await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true }).catch(() => undefined);
-  const result = await GoogleSignin.signIn();
-  if (!result.data) throw new Error('Đăng nhập Google đã bị hủy');
-  await GoogleSignin.addScopes({ scopes: [DRIVE_SCOPE] });
-  const tokens = await GoogleSignin.getTokens();
-  return { accessToken: tokens.accessToken, user: result.data.user };
-}
-
-export async function currentGoogleAccessToken(): Promise<string | null> {
-  configureGoogleSignIn();
-  try {
-    const signed = await GoogleSignin.signInSilently();
-    if (!signed.data) return null;
-    await GoogleSignin.addScopes({ scopes: [DRIVE_SCOPE] });
-    return (await GoogleSignin.getTokens()).accessToken;
-  } catch {
-    return null;
-  }
-}
 
 export async function requestPhotoLibrary() {
   const permission = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
@@ -64,7 +21,7 @@ export async function requestPhotoLibrary() {
   return permission;
 }
 
-export async function loadDevicePhotos(limit = 120): Promise<MediaLibrary.Asset[]> {
+export async function loadDevicePhotos(limit = 300): Promise<MediaLibrary.Asset[]> {
   await requestPhotoLibrary();
   const result = await MediaLibrary.getAssetsAsync({
     first: limit,
@@ -74,11 +31,18 @@ export async function loadDevicePhotos(limit = 120): Promise<MediaLibrary.Asset[
   return result.assets;
 }
 
+function normalizeBaseUrl(value: string) {
+  const trimmed = value.trim().replace(/\/$/, '');
+  if (!/^https?:\/\//i.test(trimmed)) return `http://${trimmed}`;
+  return trimmed;
+}
+
 function mimeFor(asset: MediaLibrary.Asset): string {
   if (asset.mediaType === MediaLibrary.MediaType.video) return 'video/mp4';
   const ext = asset.filename.split('.').pop()?.toLowerCase();
   if (ext === 'png') return 'image/png';
   if (ext === 'heic' || ext === 'heif') return 'image/heic';
+  if (ext === 'webp') return 'image/webp';
   return 'image/jpeg';
 }
 
@@ -87,79 +51,69 @@ async function materializeAsset(asset: MediaLibrary.Asset): Promise<{ uri: strin
   const originalUri = info.localUri || info.uri || asset.uri;
   let uri = originalUri;
   let temporary = false;
+
   if (!uri.startsWith('file://')) {
-    const cacheDir = `${FileSystem.cacheDirectory}photosync-upload/`;
+    const cacheDir = `${FileSystem.cacheDirectory}photosync-send/`;
     await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true });
     uri = `${cacheDir}${asset.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${asset.filename}`;
     await FileSystem.copyAsync({ from: originalUri, to: uri });
     temporary = true;
   }
+
   const fsInfo = await FileSystem.getInfoAsync(uri);
-  if (!fsInfo.exists || typeof fsInfo.size !== 'number') throw new Error(`Không đọc được file ${asset.filename}`);
+  if (!fsInfo.exists || typeof fsInfo.size !== 'number') throw new Error(`Không đọc được ${asset.filename}`);
   return { uri, size: fsInfo.size, temporary };
 }
 
-export async function backupAssetsToDrive(
-  accessToken: string,
-  assets: MediaLibrary.Asset[],
-  onProgress?: (progress: BackupProgress) => void,
-): Promise<BackupProgress> {
-  const folderId = await ensurePhotoSyncFolder(accessToken);
-  const [remote, quota] = await Promise.all([
-    listPhotoSyncFiles(accessToken, folderId),
-    getStorageQuota(accessToken),
-  ]);
-  const remoteNames = new Set(remote.map(file => file.name));
-  let appUsedBytes = remote.reduce((sum, file) => sum + Number(file.size || 0), 0);
-  const quotaLimit = Number(quota.limit || 0);
-  let providerFreeBytes = Math.max(0, quotaLimit - Number(quota.usage || 0));
-  const account: StorageAccount = { id: 'current', email: 'current', appUsedBytes, providerFreeBytes };
-  const progress: BackupProgress = { total: assets.length, completed: 0, skipped: 0, failed: 0, blockedByQuota: 0 };
+export async function pingLaptop(target: LaptopTarget) {
+  const response = await fetch(`${normalizeBaseUrl(target.baseUrl)}/api/v1/status`, {
+    headers: { 'x-photosync-pair-code': target.pairCode },
+  });
+  if (!response.ok) throw new Error(response.status === 401 ? 'Sai mã ghép nối laptop.' : `Laptop trả lỗi ${response.status}`);
+  return response.json() as Promise<{ name: string; version: string; libraryPath: string; received: number }>;
+}
 
-  for (const asset of assets) {
+export async function syncAssetsToLaptop(
+  target: LaptopTarget,
+  assets: MediaLibrary.Asset[],
+  onProgress?: (progress: SyncProgress) => void,
+): Promise<SyncProgress> {
+  await pingLaptop(target);
+  const progress: SyncProgress = { total: assets.length, completed: 0, skipped: 0, failed: 0 };
+  const baseUrl = normalizeBaseUrl(target.baseUrl);
+
+  for (const asset of [...assets].reverse()) {
     progress.current = asset.filename;
     onProgress?.({ ...progress });
-    if (remoteNames.has(asset.filename)) {
-      progress.skipped += 1;
-      onProgress?.({ ...progress });
-      continue;
-    }
-
-    let materialized: Awaited<ReturnType<typeof materializeAsset>> | null = null;
+    let local: Awaited<ReturnType<typeof materializeAsset>> | null = null;
     try {
-      materialized = await materializeAsset(asset);
-      account.appUsedBytes = appUsedBytes;
-      account.providerFreeBytes = providerFreeBytes;
-      if (materialized.size > safeAvailable(account)) {
-        progress.blockedByQuota = (progress.blockedByQuota || 0) + 1;
-        continue;
-      }
-      const mimeType = mimeFor(asset);
-      const sessionUri = await createResumableUploadSession(accessToken, {
-        name: asset.filename,
-        mimeType,
-        sizeBytes: materialized.size,
-        folderId,
-        appProperties: { photosyncAssetId: asset.id, photosyncCreatedAt: String(asset.creationTime) },
-      });
-      const uploaded = await FileSystem.uploadAsync(sessionUri, materialized.uri, {
-        httpMethod: 'PUT',
+      local = await materializeAsset(asset);
+      const result = await FileSystem.uploadAsync(`${baseUrl}/api/v1/media`, local.uri, {
+        httpMethod: 'POST',
         uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-        headers: { 'Content-Type': mimeType },
+        headers: {
+          'content-type': mimeFor(asset),
+          'content-length': String(local.size),
+          'x-photosync-pair-code': target.pairCode,
+          'x-photosync-device-id': target.deviceId,
+          'x-photosync-asset-id': asset.id,
+          'x-photosync-filename': encodeURIComponent(asset.filename),
+          'x-photosync-created-at': String(asset.creationTime),
+          'x-photosync-media-type': asset.mediaType,
+        },
       });
-      if (uploaded.status < 200 || uploaded.status >= 300) throw new Error(`Upload ${uploaded.status}: ${uploaded.body}`);
-      remoteNames.add(asset.filename);
-      appUsedBytes += materialized.size;
-      providerFreeBytes = Math.max(0, providerFreeBytes - materialized.size);
-      progress.completed += 1;
+      if (result.status === 208) progress.skipped += 1;
+      else if (result.status >= 200 && result.status < 300) progress.completed += 1;
+      else throw new Error(`Laptop ${result.status}: ${result.body}`);
     } catch (error) {
-      console.error('PhotoSync upload failed', asset.filename, error);
+      console.error('PhotoSync mobile -> laptop failed', asset.filename, error);
       progress.failed += 1;
     } finally {
-      if (materialized?.temporary) await FileSystem.deleteAsync(materialized.uri, { idempotent: true }).catch(() => undefined);
+      if (local?.temporary) await FileSystem.deleteAsync(local.uri, { idempotent: true }).catch(() => undefined);
       onProgress?.({ ...progress });
     }
   }
+
   progress.current = undefined;
   onProgress?.({ ...progress });
   return progress;
