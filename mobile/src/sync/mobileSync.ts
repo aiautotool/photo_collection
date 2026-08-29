@@ -1,7 +1,8 @@
-import * as MediaLibrary from 'expo-media-library';
+import * as MediaLibrary from 'expo-media-library/legacy';
 import * as FileSystem from 'expo-file-system/legacy';
 import type { PairedDesktop } from './pairing';
 
+export type MediaAsset = MediaLibrary.Asset;
 export type SyncProgress = {
   total: number;
   completed: number;
@@ -16,18 +17,18 @@ export async function requestPhotoLibrary() {
   return permission;
 }
 
-export async function loadDevicePhotos(limit = 300): Promise<MediaLibrary.Asset[]> {
+export async function loadDevicePhotos(limit = 300): Promise<MediaAsset[]> {
   await requestPhotoLibrary();
   const result = await MediaLibrary.getAssetsAsync({
     first: limit,
-    mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
-    sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+    mediaType: ['photo', 'video'],
+    sortBy: [['creationTime', false]] as any,
   });
   return result.assets;
 }
 
-function mimeFor(asset: MediaLibrary.Asset): string {
-  if (asset.mediaType === MediaLibrary.MediaType.video) return 'video/mp4';
+function mimeFor(asset: MediaAsset): string {
+  if (asset.mediaType === 'video') return 'video/mp4';
   const ext = asset.filename.split('.').pop()?.toLowerCase();
   if (ext === 'png') return 'image/png';
   if (ext === 'heic' || ext === 'heif') return 'image/heic';
@@ -35,7 +36,7 @@ function mimeFor(asset: MediaLibrary.Asset): string {
   return 'image/jpeg';
 }
 
-async function materializeAsset(asset: MediaLibrary.Asset): Promise<{ uri: string; size: number; temporary: boolean }> {
+async function materializeAsset(asset: MediaAsset): Promise<{ uri: string; size: number; temporary: boolean }> {
   const info = await MediaLibrary.getAssetInfoAsync(asset);
   const originalUri = info.localUri || info.uri || asset.uri;
   let uri = originalUri;
@@ -68,7 +69,7 @@ export async function pingLaptop(target: PairedDesktop) {
 
 export async function syncAssetsToLaptop(
   target: PairedDesktop,
-  assets: MediaLibrary.Asset[],
+  assets: MediaAsset[],
   onProgress?: (progress: SyncProgress) => void,
 ): Promise<SyncProgress> {
   await pingLaptop(target);
