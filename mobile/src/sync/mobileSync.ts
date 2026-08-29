@@ -1,11 +1,6 @@
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
-
-export type LaptopTarget = {
-  baseUrl: string;
-  pairCode: string;
-  deviceId: string;
-};
+import type { PairedDesktop } from './pairing';
 
 export type SyncProgress = {
   total: number;
@@ -29,12 +24,6 @@ export async function loadDevicePhotos(limit = 300): Promise<MediaLibrary.Asset[
     sortBy: [[MediaLibrary.SortBy.creationTime, false]],
   });
   return result.assets;
-}
-
-function normalizeBaseUrl(value: string) {
-  const trimmed = value.trim().replace(/\/$/, '');
-  if (!/^https?:\/\//i.test(trimmed)) return `http://${trimmed}`;
-  return trimmed;
 }
 
 function mimeFor(asset: MediaLibrary.Asset): string {
@@ -65,22 +54,25 @@ async function materializeAsset(asset: MediaLibrary.Asset): Promise<{ uri: strin
   return { uri, size: fsInfo.size, temporary };
 }
 
-export async function pingLaptop(target: LaptopTarget) {
-  const response = await fetch(`${normalizeBaseUrl(target.baseUrl)}/api/v1/status`, {
-    headers: { 'x-photosync-pair-code': target.pairCode },
-  });
-  if (!response.ok) throw new Error(response.status === 401 ? 'Sai mã ghép nối laptop.' : `Laptop trả lỗi ${response.status}`);
-  return response.json() as Promise<{ name: string; version: string; libraryPath: string; received: number }>;
+function relayEndpoint(target: PairedDesktop, path: string) {
+  return `${target.relayUrl.replace(/\/$/, '')}${path}`;
+}
+
+export async function pingLaptop(target: PairedDesktop) {
+  const response = await fetch(relayEndpoint(target, `/api/v1/desktop/${encodeURIComponent(target.desktopId)}/status`));
+  if (!response.ok) throw new Error(`Relay trả lỗi ${response.status}`);
+  const data = await response.json() as { online: boolean };
+  if (!data.online) throw new Error('Laptop đang offline');
+  return data;
 }
 
 export async function syncAssetsToLaptop(
-  target: LaptopTarget,
+  target: PairedDesktop,
   assets: MediaLibrary.Asset[],
   onProgress?: (progress: SyncProgress) => void,
 ): Promise<SyncProgress> {
   await pingLaptop(target);
   const progress: SyncProgress = { total: assets.length, completed: 0, skipped: 0, failed: 0 };
-  const baseUrl = normalizeBaseUrl(target.baseUrl);
 
   for (const asset of [...assets].reverse()) {
     progress.current = asset.filename;
@@ -88,25 +80,30 @@ export async function syncAssetsToLaptop(
     let local: Awaited<ReturnType<typeof materializeAsset>> | null = null;
     try {
       local = await materializeAsset(asset);
-      const result = await FileSystem.uploadAsync(`${baseUrl}/api/v1/media`, local.uri, {
-        httpMethod: 'POST',
-        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-        headers: {
-          'content-type': mimeFor(asset),
-          'content-length': String(local.size),
-          'x-photosync-pair-code': target.pairCode,
-          'x-photosync-device-id': target.deviceId,
-          'x-photosync-asset-id': asset.id,
-          'x-photosync-filename': encodeURIComponent(asset.filename),
-          'x-photosync-created-at': String(asset.creationTime),
-          'x-photosync-media-type': asset.mediaType,
+      const result = await FileSystem.uploadAsync(
+        relayEndpoint(target, `/api/v1/upload/${encodeURIComponent(target.desktopId)}`),
+        local.uri,
+        {
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          headers: {
+            'content-type': mimeFor(asset),
+            'content-length': String(local.size),
+            'x-photosync-pair-token': target.pairToken,
+            'x-photosync-device-id': target.deviceId,
+            'x-photosync-asset-id': asset.id,
+            'x-photosync-filename': encodeURIComponent(asset.filename),
+            'x-photosync-created-at': String(asset.creationTime),
+            'x-photosync-media-type': asset.mediaType,
+          },
         },
-      });
+      );
       if (result.status === 208) progress.skipped += 1;
       else if (result.status >= 200 && result.status < 300) progress.completed += 1;
-      else throw new Error(`Laptop ${result.status}: ${result.body}`);
+      else if (result.status === 503) throw new Error('Laptop đang offline');
+      else throw new Error(`Tunnel ${result.status}: ${result.body}`);
     } catch (error) {
-      console.error('PhotoSync mobile -> laptop failed', asset.filename, error);
+      console.error('PhotoSync mobile -> Internet tunnel -> laptop failed', asset.filename, error);
       progress.failed += 1;
     } finally {
       if (local?.temporary) await FileSystem.deleteAsync(local.uri, { idempotent: true }).catch(() => undefined);
