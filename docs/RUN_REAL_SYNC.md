@@ -1,94 +1,138 @@
-# Chạy sync thật: Mobile → Laptop → Local / Google Drive
+# PhotoSync real sync: Mobile → Internet Tunnel → Laptop
 
-## 1. Luồng đúng
+## Kiến trúc
 
 ```text
-Photos / MediaStore
-       ↓
+Phone Photos / MediaStore
+        ↓
 PhotoSync Mobile
-       ↓ LAN direct sync
-PhotoSync Laptop Receiver :43117
-       ↓
+        ↓ HTTPS upload
+PhotoSync Relay / Reverse Tunnel
+        ↓ WSS notification + streamed download
+PhotoSync Desktop
+        ↓
 Pictures/PhotoSync/YYYY/MM
-       ↓
+        ↓
 Storage Manager
-       ├── giữ local
-       └── phân phối lên Google Drive pool
+        ├── Local
+        └── Google Drive 1..N
 ```
 
-Mobile không đăng nhập Google và không tự upload Drive.
+Mobile không đăng nhập Google Drive. Laptop là trung tâm quản lý storage.
 
-## 2. Chạy desktop
+## 1. Chạy relay
 
 ```bash
 npm install
-cp desktop/.env.example desktop/.env
-npm run desktop
+npm run relay
 ```
 
-Desktop sẽ hiển thị:
-- Receiver URL, ví dụ `http://192.168.1.20:43117`
-- Mã ghép nối 6 số
-- Số file local đã nhận
-- Số tài khoản Google Drive đã thêm
+Mặc định relay nghe `:8787`.
 
-Windows/macOS có thể cần cho phép PhotoSync/Electron qua firewall mạng Private/LAN.
+### Expose relay bằng Cloudflare Tunnel
 
-## 3. Chạy mobile
+Development nhanh:
 
 ```bash
-cd mobile
-npx expo prebuild --clean
-npm run android
-# hoặc macOS
-npm run ios
+cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
-Trong app:
-1. Cấp quyền Photos/Media Library.
-2. Vào tab **Máy tính**.
-3. Nhập Receiver URL của laptop.
-4. Nhập mã ghép nối 6 số.
-5. Bấm **Kết nối laptop**.
-6. Sang tab **Ảnh** → **Đồng bộ**.
-
-Mobile gửi file gốc trực tiếp tới laptop. Laptop trả HTTP `201` khi đã lưu local và `208` nếu asset đó đã được nhận trước đây.
-
-## 4. Local library
-
-Laptop lưu theo thời gian tạo media:
+Production nên dùng **named Cloudflare Tunnel + hostname cố định**, ví dụ:
 
 ```text
-Pictures/
-  PhotoSync/
-    2026/
-      08/
-        IMG_0001.HEIC
-        VID_0002.MOV
+https://relay.photosync.example.com
 ```
 
-Sau khi nhận file, desktop tính SHA-256 và ghi media index trong app user-data.
+Cloudflare Tunnel dùng kết nối outbound-only nên relay server không cần mở inbound port trực tiếp.
 
-## 5. Google Drive chỉ ở desktop
+## 2. Desktop
 
-Tạo Google Cloud OAuth client loại **Desktop app**, enable Google Drive API, rồi cấu hình:
+```bash
+cp desktop/.env.example desktop/.env
+```
+
+Đặt relay URL cố định:
+
+```env
+PHOTOSYNC_RELAY_URL=https://relay.photosync.example.com
+```
+
+Nếu dùng Google Drive pool, thêm OAuth Desktop Client:
 
 ```env
 PHOTOSYNC_GOOGLE_DESKTOP_CLIENT_ID=...
 PHOTOSYNC_GOOGLE_DESKTOP_CLIENT_SECRET=...
 ```
 
-Trong desktop bấm **Thêm tài khoản Google**. Có thể thêm nhiều tài khoản; mỗi OAuth token được desktop lưu riêng.
+Chạy:
 
-Khi có file local mới, Storage Manager đọc quota từng Drive và chọn account đủ điều kiện:
+```bash
+npm run desktop
+```
+
+Desktop tự tạo và lưu vĩnh viễn:
+
+```text
+desktopId
+pairToken
+hostSecret
+```
+
+Sau đó desktop kết nối outbound WSS tới relay và UI hiển thị QR.
+
+## 3. Mobile pairing
+
+Mobile mở tab **Máy tính** → **Quét QR từ laptop**.
+
+QR chứa:
+
+```json
+{
+  "v": 1,
+  "relayUrl": "https://relay.photosync.example.com",
+  "desktopId": "desk_...",
+  "pairToken": "..."
+}
+```
+
+Mobile lưu pairing bằng Expo SecureStore/Keychain. QR chỉ cần quét một lần.
+
+## 4. Các lần sau
+
+```text
+Laptop bật
+  ↓
+Desktop tự nối WSS tới relay
+  ↓
+Relay đánh dấu desktop online
+
+Mobile mở / trở lại foreground / background task được OS chạy
+  ↓
+Kiểm tra desktop online
+  ↓
+Tự gửi ảnh chưa có
+  ↓
+Relay giữ request tới khi laptop ACK
+  ↓
+Laptop lưu local + SHA-256 + dedup
+  ↓
+Storage Manager phân phối Drive
+```
+
+Không cần cùng Wi‑Fi và không cần quét QR lại.
+
+## 5. Background behavior
+
+- Android/iOS: PhotoSync đăng ký background task với minimum interval 15 phút.
+- Khi app quay lại foreground, sync chạy ngay nếu laptop online.
+- iOS quyết định thời điểm chạy background task; không đảm bảo chạy đúng ngay lúc laptop vừa bật.
+- Muốn wake-up gần realtime khi laptop online trong khi iPhone đang background lâu, bước production tiếp theo là silent push/APNs/FCM từ relay.
+
+## 6. Storage rule phía laptop
 
 ```text
 appUsed + incomingFile <= 10 GiB
-providerFreeAfterUpload >= 5 GiB
+providerFree - incomingFile >= 5 GiB
 ```
 
-Nếu không có Drive nào phù hợp, file vẫn an toàn ở local và cloud state là `BLOCKED`.
-
-## 6. Bảo mật mạng
-
-Phiên bản hiện tại dùng LAN HTTP + pair code 6 số để hoàn thiện luồng MVP. Chỉ dùng trên mạng tin cậy. Trước khi hỗ trợ sync qua Internet/public Wi-Fi cần nâng lên khóa riêng từng device + encrypted transport/TLS.
+Nếu không Drive nào hợp lệ, file vẫn nằm an toàn trong local library và cloud state = BLOCKED.
