@@ -1,107 +1,94 @@
-# Chạy sync thật: Mobile → Google Drive → Laptop
+# Chạy sync thật: Mobile → Laptop → Local / Google Drive
 
-PhotoSync dùng **cùng một Google Cloud project** cho mobile và desktop. Người dùng cuối chỉ bấm đăng nhập Google; các Client ID chỉ cấu hình một lần khi build.
+## 1. Luồng đúng
 
-## 1. Google Cloud (làm một lần)
-
-1. Tạo Google Cloud project.
-2. Enable **Google Drive API**.
-3. OAuth consent screen: thêm scope `https://www.googleapis.com/auth/drive.file`.
-4. Tạo các OAuth Client ID:
-   - **Web application**: dùng làm `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
-   - **Android**: package `com.aiautotool.photosync`, thêm SHA-1 debug/release.
-   - **iOS**: bundle id `com.aiautotool.photosync`.
-   - **Desktop app**: dùng cho Windows/macOS Electron.
-
-## 2. Mobile
-
-```bash
-cp mobile/.env.example mobile/.env
+```text
+Photos / MediaStore
+       ↓
+PhotoSync Mobile
+       ↓ LAN direct sync
+PhotoSync Laptop Receiver :43117
+       ↓
+Pictures/PhotoSync/YYYY/MM
+       ↓
+Storage Manager
+       ├── giữ local
+       └── phân phối lên Google Drive pool
 ```
 
-Điền 3 giá trị trong `mobile/.env`:
+Mobile không đăng nhập Google và không tự upload Drive.
 
-```env
-EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...
-EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=...
-EXPO_PUBLIC_GOOGLE_IOS_REVERSED_CLIENT_ID=...
-```
-
-Sau đó:
+## 2. Chạy desktop
 
 ```bash
 npm install
+cp desktop/.env.example desktop/.env
+npm run desktop
+```
+
+Desktop sẽ hiển thị:
+- Receiver URL, ví dụ `http://192.168.1.20:43117`
+- Mã ghép nối 6 số
+- Số file local đã nhận
+- Số tài khoản Google Drive đã thêm
+
+Windows/macOS có thể cần cho phép PhotoSync/Electron qua firewall mạng Private/LAN.
+
+## 3. Chạy mobile
+
+```bash
 cd mobile
 npx expo prebuild --clean
 npm run android
-# hoặc trên macOS
+# hoặc macOS
 npm run ios
 ```
 
-> Google Sign-In dùng native module nên không chạy bằng Expo Go. Dùng development build (`expo run:android` / `expo run:ios`).
-
 Trong app:
-1. Cho phép truy cập Photos/Media Library.
-2. Mở **Thư viện** → **Kết nối Google Drive**.
-3. Bấm **Sao lưu ngay**.
-4. File được upload vào thư mục `PhotoSync` trên Google Drive.
+1. Cấp quyền Photos/Media Library.
+2. Vào tab **Máy tính**.
+3. Nhập Receiver URL của laptop.
+4. Nhập mã ghép nối 6 số.
+5. Bấm **Kết nối laptop**.
+6. Sang tab **Ảnh** → **Đồng bộ**.
 
-## 3. Desktop Windows/macOS
+Mobile gửi file gốc trực tiếp tới laptop. Laptop trả HTTP `201` khi đã lưu local và `208` nếu asset đó đã được nhận trước đây.
 
-```bash
-cp desktop/.env.example desktop/.env
+## 4. Local library
+
+Laptop lưu theo thời gian tạo media:
+
+```text
+Pictures/
+  PhotoSync/
+    2026/
+      08/
+        IMG_0001.HEIC
+        VID_0002.MOV
 ```
 
-Điền Client ID/Secret của OAuth client loại **Desktop app**:
+Sau khi nhận file, desktop tính SHA-256 và ghi media index trong app user-data.
+
+## 5. Google Drive chỉ ở desktop
+
+Tạo Google Cloud OAuth client loại **Desktop app**, enable Google Drive API, rồi cấu hình:
 
 ```env
 PHOTOSYNC_GOOGLE_DESKTOP_CLIENT_ID=...
 PHOTOSYNC_GOOGLE_DESKTOP_CLIENT_SECRET=...
 ```
 
-Chạy:
+Trong desktop bấm **Thêm tài khoản Google**. Có thể thêm nhiều tài khoản; mỗi OAuth token được desktop lưu riêng.
 
-```bash
-npm install
-npm run desktop
-```
-
-Trong app desktop:
-1. Bấm **Kết nối Google Drive**.
-2. Đăng nhập **cùng Gmail** đã dùng trên mobile.
-3. App tự quét Drive mỗi 30 giây.
-4. File mới được tải về:
-   - Windows: `Pictures\\PhotoSync`
-   - macOS: `~/Pictures/PhotoSync`
-5. Gallery desktop đọc trực tiếp các file vừa tải về.
-
-## 4. Luồng sync
+Khi có file local mới, Storage Manager đọc quota từng Drive và chọn account đủ điều kiện:
 
 ```text
-Photos / MediaStore
-       ↓
-PhotoSync Mobile
-       ↓ resumable upload
-Google Drive / PhotoSync
-       ↓ poll 30 giây
-PhotoSync Desktop
-       ↓
-Pictures / PhotoSync
+appUsed + incomingFile <= 10 GiB
+providerFreeAfterUpload >= 5 GiB
 ```
 
-## 5. Rule dung lượng
+Nếu không có Drive nào phù hợp, file vẫn an toàn ở local và cloud state là `BLOCKED`.
 
-Trước mỗi upload, mobile đọc Google Drive quota và tổng dung lượng file trong thư mục PhotoSync:
+## 6. Bảo mật mạng
 
-```text
-appUsed + file <= 10 GB
-providerFree - file >= 5 GB
-```
-
-Nếu không thỏa một trong hai điều kiện thì file không được upload.
-
-## Hiện trạng v0.3
-
-- Sync thật chạy theo **một Gmail đang kết nối** từ mobile sang desktop.
-- Engine quota 10GB/5GB đã chạy trên upload thật.
-- Multi-Gmail allocator đã có trong `@photosync/core`, nhưng luồng OAuth lưu đồng thời nhiều Gmail vẫn là bước tiếp theo để hoàn thiện storage pool nhiều tài khoản.
+Phiên bản hiện tại dùng LAN HTTP + pair code 6 số để hoàn thiện luồng MVP. Chỉ dùng trên mạng tin cậy. Trước khi hỗ trợ sync qua Internet/public Wi-Fi cần nâng lên khóa riêng từng device + encrypted transport/TLS.
