@@ -1,15 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import exifr from 'exifr';
+import logoUrl from '../build/icon.iconset/icon_128x128@2x.png?inline';
+import './pages.css';
 
-type LocalMedia = { name:string; path:string; url:string; modifiedAt:string; sourceDevice?:string };
-type DesktopStatus = { state:'idle'|'receiving'|'uploading'|'error'; received:number; duplicates:number; cloudUploaded:number; cloudBlocked:number; message?:string; receiverUrl?:string; pairCode?:string; libraryPath?:string; driveAccounts?:number; lastRunAt?:string };
+type LocalMedia = { key:string;name:string;path:string;url:string;modifiedAt:string;sourceDevice?:string;size:number;receivedAt:string;sha256:string;localAvailable:boolean;cloudAvailable:boolean };
+type CloudState = 'QUEUED'|'UPLOADING'|'VERIFYING'|'VERIFIED'|'UPLOADED'|'BLOCKED'|'ERROR';
+type CloudUpload = { key:string;filename:string;size:number;receivedAt:string;deviceId:string;state:CloudState;accountId?:string;accountEmail?:string;folderId?:string;remotePath?:string;remoteFileId?:string;webViewLink?:string;uploadedAt?:string;verifiedAt?:string;message?:string };
+type DesktopStatus = { state:'idle'|'receiving'|'uploading'|'error'; received:number; duplicates:number; cloudUploaded:number; cloudBlocked:number; message?:string; receiverUrl?:string; publicUrl?:string; tunnelHealthy?:boolean; pairCode?:string; libraryPath?:string; driveAccounts?:number; lastRunAt?:string };
 type TunnelState = { connected:boolean; relayUrl:string; desktopId:string; pairingPayload:string; lastError?:string };
+type DriveAccount = { id:string;email:string;usedBytes:number;freeBytes:number;totalBytes:number;status:'ready'|'unavailable' };
+type MediaMetadata = {make?:string;model?:string;lens?:string;software?:string;focalLength?:number;focalLength35mm?:number;aperture?:number;exposureTime?:number;iso?:number;flash?:string;latitude?:number;longitude?:number;capturedAt?:Date};
 type DesktopBridge = {
+  platform:string;
   getStatus():Promise<DesktopStatus>;
   getTunnelStatus():Promise<TunnelState>;
   listLocalMedia():Promise<LocalMedia[]>;
+  listCloudUploads():Promise<CloudUpload[]>;
   openLibrary():Promise<void>;
+  openExternal(url:string):Promise<void>;
   addGoogleAccount():Promise<DesktopStatus>;
+  listGoogleAccounts():Promise<DriveAccount[]>;
+  removeGoogleAccount(accountId:string):Promise<DesktopStatus>;
   retryCloud():Promise<DesktopStatus>;
   onFileReceived(cb:(event:{name:string;path:string})=>void):()=>void;
   onStorageUpdated(cb:(event:unknown)=>void):()=>void;
@@ -17,67 +29,122 @@ type DesktopBridge = {
 };
 declare global { interface Window { photoSyncDesktop?:DesktopBridge } }
 
-const nav=[['⌂','Tổng quan'],['▣','Ảnh'],['▤','Album'],['◫','Thiết bị'],['◈','Tài khoản lưu trữ'],['⚙','Cài đặt']];
+const nav=[['⌂','Tổng quan'],['▣','Ảnh'],['▤','Album'],['◫','Thiết bị'],['⇧','Bản sao an toàn'],['◈','Tài khoản lưu trữ'],['⚙','Cài đặt']];
+
+function Empty({title,description}:{title:string;description:string}){
+  return <div className="empty-state"><div className="empty-cloud">▣</div><h2>{title}</h2><p>{description}</p></div>
+}
+
+function isVideo(name:string){return /\.(mov|mp4|m4v|avi|mkv|webm)$/i.test(name)}
+function formatDuration(seconds:number){if(!Number.isFinite(seconds))return '0:00';const value=Math.max(0,Math.floor(seconds));const h=Math.floor(value/3600),m=Math.floor(value%3600/60),s=value%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`}
+function formatExposure(value?:number){if(!value)return '';return value<1?`1/${Math.round(1/value)} giây`:`${value} giây`}
+function VideoThumbnail({item}:{item:LocalMedia}){const [duration,setDuration]=useState(0);return <><video src={item.url} muted playsInline preload="metadata" onLoadedMetadata={event=>{const video=event.currentTarget;setDuration(video.duration);if(video.duration>0)video.currentTime=Math.min(.25,video.duration/10)}}/><span className="video-play">▶</span><span className="video-duration">{formatDuration(duration)}</span></>}
 
 export function App(){
   const [active,setActive]=useState('Ảnh');
   const [query,setQuery]=useState('');
   const [media,setMedia]=useState<LocalMedia[]>([]);
+  const [uploads,setUploads]=useState<CloudUpload[]>([]);
+  const [accounts,setAccounts]=useState<DriveAccount[]>([]);
+  const [removingAccount,setRemovingAccount]=useState<string|null>(null);
+  const [uploadFilter,setUploadFilter]=useState<'ALL'|CloudState>('ALL');
+  const [uploadPage,setUploadPage]=useState(1);
+  const [uploadPageSize,setUploadPageSize]=useState(25);
   const [selected,setSelected]=useState<LocalMedia|null>(null);
+  const [selectedMetadata,setSelectedMetadata]=useState<MediaMetadata|null>(null);
+  const [metadataLoading,setMetadataLoading]=useState(false);
+  const [mediaDimensions,setMediaDimensions]=useState<{width:number;height:number;duration?:number}|null>(null);
+  const [timeFilter,setTimeFilter]=useState<'all'|'year'|'month'|'day'>('all');
+  const [compact,setCompact]=useState(()=>localStorage.getItem('photosync.compact')==='true');
+  const [visiblePhotoCount,setVisiblePhotoCount]=useState(20);
+  const photoLoadMoreRef=useRef<HTMLDivElement|null>(null);
   const [status,setStatus]=useState<DesktopStatus>({state:'idle',received:0,duplicates:0,cloudUploaded:0,cloudBlocked:0});
   const [tunnel,setTunnel]=useState<TunnelState>({connected:false,relayUrl:'',desktopId:'',pairingPayload:''});
 
-  async function refresh(){const b=window.photoSyncDesktop;if(!b)return;const [s,m,t]=await Promise.all([b.getStatus(),b.listLocalMedia(),b.getTunnelStatus()]);setStatus(s);setMedia(m);setTunnel(t)}
+  async function refresh(){const b=window.photoSyncDesktop;if(!b)return;const [s,m,t,u,a]=await Promise.all([b.getStatus(),b.listLocalMedia(),b.getTunnelStatus(),b.listCloudUploads(),b.listGoogleAccounts()]);setStatus(s);setMedia(m);setTunnel(t);setUploads(u);setAccounts(a)}
   useEffect(()=>{void refresh();const b=window.photoSyncDesktop;if(!b)return;const off1=b.onFileReceived(()=>void refresh());const off2=b.onStorageUpdated(()=>void refresh());const off3=b.onTunnelState(t=>setTunnel(t));const timer=setInterval(()=>void refresh(),8000);return()=>{off1();off2();off3();clearInterval(timer)}},[]);
-  const filtered=useMemo(()=>media.filter(x=>x.name.toLowerCase().includes(query.toLowerCase())),[media,query]);
+  const filtered=useMemo(()=>media.filter(x=>{
+    if(!x.name.toLowerCase().includes(query.toLowerCase()))return false;
+    if(timeFilter==='all')return true;
+    const d=new Date(x.modifiedAt),now=new Date();
+    if(timeFilter==='year')return d.getFullYear()===now.getFullYear();
+    if(timeFilter==='month')return d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth();
+    return d.toDateString()===now.toDateString();
+  }),[media,query,timeFilter]);
+  const albums=useMemo(()=>Object.entries(media.reduce<Record<string,LocalMedia[]>>((acc,item)=>{
+    const d=new Date(item.modifiedAt);const key=Number.isNaN(d.getTime())?'Không rõ ngày':d.toLocaleDateString('vi-VN',{month:'long',year:'numeric'});
+    (acc[key]??=[]).push(item);return acc;
+  },{})),[media]);
+  const visiblePhotos=useMemo(()=>filtered.slice(0,visiblePhotoCount),[filtered,visiblePhotoCount]);
+  useEffect(()=>setVisiblePhotoCount(20),[query,timeFilter]);
+  useEffect(()=>{
+    if(active!=='Ảnh'||visiblePhotoCount>=filtered.length)return;
+    const target=photoLoadMoreRef.current;if(!target)return;
+    const observer=new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)setVisiblePhotoCount(count=>Math.min(count+20,filtered.length))},{rootMargin:'320px 0px'});
+    observer.observe(target);return()=>observer.disconnect();
+  },[active,visiblePhotoCount,filtered.length]);
+  const pairingPayload=useMemo(()=>{
+    if(!tunnel.pairingPayload||!status.receiverUrl||!status.pairCode)return '';
+    try{return JSON.stringify({...JSON.parse(tunnel.pairingPayload),publicUrl:status.publicUrl,receiverUrl:status.receiverUrl,pairCode:status.pairCode})}catch{return ''}
+  },[tunnel.pairingPayload,status.receiverUrl,status.publicUrl,status.pairCode]);
+  const uploadSummary=useMemo(()=>{const successful=uploads.filter(x=>x.state==='VERIFIED'||x.state==='UPLOADED');return {waiting:uploads.filter(x=>x.state==='QUEUED'||x.state==='BLOCKED').length,uploading:uploads.filter(x=>x.state==='UPLOADING'||x.state==='VERIFYING').length,verified:successful.length,failed:uploads.filter(x=>x.state==='ERROR').length,accounts:new Set(successful.map(x=>x.accountId).filter(Boolean)).size}},[uploads]);
+  const selectedReplicas=useMemo(()=>selected?uploads.filter(item=>item.key===selected.key):[],[selected,uploads]);
+  const selectedVerifiedCount=selectedReplicas.filter(item=>item.state==='VERIFIED'||item.state==='UPLOADED').length;
+  const visibleUploads=useMemo(()=>uploads.filter(x=>uploadFilter==='ALL'||x.state===uploadFilter),[uploads,uploadFilter]);
+  const uploadPageCount=Math.max(1,Math.ceil(visibleUploads.length/uploadPageSize));
+  const pagedUploads=useMemo(()=>visibleUploads.slice((uploadPage-1)*uploadPageSize,uploadPage*uploadPageSize),[visibleUploads,uploadPage,uploadPageSize]);
+  useEffect(()=>setUploadPage(1),[uploadFilter,uploadPageSize]);
+  useEffect(()=>setUploadPage(page=>Math.min(page,uploadPageCount)),[uploadPageCount]);
+  useEffect(()=>{
+    setSelectedMetadata(null);setMediaDimensions(null);
+    if(!selected||isVideo(selected.name))return;
+    let active=true;setMetadataLoading(true);
+    void fetch(selected.url).then(response=>response.arrayBuffer()).then(buffer=>exifr.parse(buffer,{tiff:true,exif:true,gps:true,xmp:true,translateValues:true,pick:['Make','Model','LensModel','Software','FocalLength','FocalLengthIn35mmFormat','FNumber','ExposureTime','ISO','Flash','latitude','longitude','DateTimeOriginal','CreateDate']})).then(data=>{if(active&&data)setSelectedMetadata({make:data.Make,model:data.Model,lens:data.LensModel,software:data.Software,focalLength:data.FocalLength,focalLength35mm:data.FocalLengthIn35mmFormat,aperture:data.FNumber,exposureTime:data.ExposureTime,iso:data.ISO,flash:typeof data.Flash==='string'?data.Flash:undefined,latitude:data.latitude,longitude:data.longitude,capturedAt:data.DateTimeOriginal||data.CreateDate})}).catch(()=>undefined).finally(()=>{if(active)setMetadataLoading(false)});
+    return()=>{active=false};
+  },[selected]);
+  const formatBytes=(bytes:number)=>bytes>=1024**3?`${(bytes/1024**3).toFixed(1)} GB`:bytes>=1024**2?`${(bytes/1024**2).toFixed(1)} MB`:`${Math.ceil(bytes/1024)} KB`;
 
   async function addGoogle(){const b=window.photoSyncDesktop;if(!b)return;try{setStatus(await b.addGoogleAccount());await refresh()}catch(e){setStatus(s=>({...s,state:'error',message:e instanceof Error?e.message:String(e)}))}}
   async function retryCloud(){const b=window.photoSyncDesktop;if(!b)return;setStatus(await b.retryCloud());await refresh()}
+  async function removeGoogle(account:DriveAccount){if(!window.confirm(`Ngắt kết nối ${account.email}? Ảnh đã lưu trong Google Drive vẫn được giữ nguyên.`))return;setRemovingAccount(account.id);try{await window.photoSyncDesktop?.removeGoogleAccount(account.id);await refresh()}finally{setRemovingAccount(null)}}
+
+  const pairingCard=<div className="panel storage-panel">
+    <div className="panel-head"><div><h3>Ghép điện thoại</h3><p>Quét đúng một lần</p></div><span className={tunnel.connected?'live-dot':'status-dot'}/></div>
+    <div className="qr-wrap">{pairingPayload?<div className="qr-code"><QRCodeSVG value={pairingPayload} size={188} level="M" includeMargin={false}/></div>:<div className="empty-cloud">⌛</div>}</div>
+            <div className="storage-summary"><div><span>Kết nối với điện thoại</span><b>{tunnel.connected?'Sẵn sàng':'Đang kết nối'}</b></div><small>{tunnel.connected?'Bạn có thể gửi ảnh từ điện thoại ngay bây giờ.':'Giữ ứng dụng mở trong giây lát để hoàn tất kết nối.'}</small></div>
+  </div>;
+
+  function renderContent(){
+    if(active==='Tổng quan')return <section className="dashboard">
+      <div className="metric-grid"><button onClick={()=>setActive('Ảnh')}><span>Ảnh trong thư viện</span><b>{media.length}</b><small>Xem thư viện →</small></button><button onClick={()=>setActive('Thiết bị')}><span>Kết nối điện thoại</span><b>{tunnel.connected?'Sẵn sàng':'Đang chờ'}</b><small>Xem thiết bị →</small></button><button onClick={()=>setActive('Tài khoản lưu trữ')}><span>Nơi lưu trữ</span><b>{status.driveAccounts||0} tài khoản</b><small>Quản lý tài khoản →</small></button><button onClick={()=>setActive('Bản sao an toàn')}><span>Đang chờ sao lưu</span><b>{status.cloudBlocked}</b><small>Xem tiến trình →</small></button></div>
+      <div className="overview-grid"><div className="panel"><div className="panel-head"><div><h3>Ảnh mới nhận</h3><p>{status.received} file trong phiên này</p></div><button onClick={()=>setActive('Ảnh')}>Xem tất cả</button></div>{media.length?<div className="photo-grid preview-grid">{media.slice(0,8).map(item=><button className="photo-card" key={item.path} onClick={()=>setSelected(item)}>{isVideo(item.name)?<VideoThumbnail item={item}/>:<img src={item.url} alt={item.name} loading="lazy"/>}</button>)}</div>:<Empty title="Chưa có ảnh" description="Ghép điện thoại để bắt đầu nhận ảnh."/>}</div>{pairingCard}</div>
+    </section>;
+    if(active==='Ảnh')return <><section className="toolbar"><div className="tabs">{([['all','Tất cả'],['year','Năm'],['month','Tháng'],['day','Ngày']] as const).map(([key,label])=><button key={key} className={timeFilter===key?'selected':''} onClick={()=>setTimeFilter(key)}>{label}</button>)}<button onClick={()=>window.photoSyncDesktop?.openLibrary()}>Mở thư mục</button></div><div className="view-actions"><button onClick={()=>void refresh()}>↻</button><button className={compact?'selected':''} onClick={()=>setCompact(v=>!v)}>▦</button></div></section><section className="content-area"><div className="gallery-pane"><div className="date-heading"><div><h3>Thư viện PhotoSync</h3><span>Đang hiển thị {visiblePhotos.length} / {filtered.length} mục</span></div></div>{filtered.length===0?<Empty title={media.length?'Không tìm thấy ảnh':'Quét QR để bắt đầu'} description={media.length?'Thử từ khóa hoặc bộ lọc thời gian khác.':'Điện thoại quét QR ở mục Thiết bị một lần để ghép với laptop.'}/>:<><div className={compact?'photo-grid compact':'photo-grid'}>{visiblePhotos.map(item=><button className="photo-card" key={item.path} onClick={()=>setSelected(item)}>{isVideo(item.name)?<VideoThumbnail item={item}/>:<img src={item.url} alt={item.name} loading="lazy"/>}<span className="photo-name">{item.name}</span></button>)}</div>{visiblePhotoCount<filtered.length&&<div ref={photoLoadMoreRef} className="photo-load-more"><span className="photo-loader"/>Đang tải thêm ảnh...</div>}</>}</div><aside className="right-rail">{pairingCard}</aside></section></>;
+    if(active==='Album')return <section className="page-section"><div className="section-title"><div><h2>Album theo thời gian</h2><p>Tự động nhóm theo tháng từ thư viện trên laptop.</p></div></div>{albums.length?<div className="album-grid">{albums.map(([name,items])=><button className="album-card" key={name} onClick={()=>{setActive('Ảnh');setQuery('')}}>{items[0]&&<img src={items[0].url} alt=""/>}<div><b>{name}</b><span>{items.length} mục</span></div></button>)}</div>:<Empty title="Chưa có album" description="Album sẽ xuất hiện sau khi laptop nhận ảnh đầu tiên."/>}</section>;
+    if(active==='Thiết bị')return <section className="page-section two-column"><div>{pairingCard}</div><div className="panel details-panel"><h3>Trạng thái kết nối</h3><div className="connection-state"><span className={tunnel.connected?'live-dot':'status-dot'}/><div><b>{tunnel.connected?'Sẵn sàng nhận ảnh':'Đang thiết lập kết nối'}</b><small>{tunnel.connected?'Điện thoại có thể gửi ảnh khi ở cùng Wi-Fi hoặc qua Internet.':'Ứng dụng sẽ tự kết nối lại. Không cần thao tác thêm.'}</small></div></div><div className="detail-row"><span>Thiết bị đã ghép</span><b>{tunnel.desktopId?'1':'0'}</b></div><div className="detail-row"><span>Lần cập nhật gần nhất</span><b>{status.lastRunAt?new Date(status.lastRunAt).toLocaleString('vi-VN'):'Chưa có dữ liệu'}</b></div><button className="sync-now" onClick={()=>void refresh()}>Kiểm tra lại kết nối</button></div></section>;
+    if(active==='Bản sao an toàn')return <section className="page-section uploads-page">
+      <div className="upload-metrics"><div><span>Đang sao lưu</span><b>{uploadSummary.uploading}</b></div><div><span>Đang chờ</span><b>{uploadSummary.waiting}</b></div><div><span>Đã an toàn</span><b>{uploadSummary.verified}</b></div><div><span>Cần thử lại</span><b>{uploadSummary.failed}</b></div><div><span>Nơi lưu đang dùng</span><b>{uploadSummary.accounts} / {status.driveAccounts||0}</b></div></div>
+      <div className="upload-toolbar"><div className="tabs">{([['ALL','Tất cả'],['UPLOADING','Đang lưu'],['QUEUED','Đang chờ'],['VERIFIED','Đã an toàn'],['ERROR','Cần thử lại']] as const).map(([key,label])=><button key={key} className={uploadFilter===key?'selected':''} onClick={()=>setUploadFilter(key)}>{label}</button>)}</div><button className="sync-now" onClick={()=>void retryCloud()}>Thử lại ngay</button></div>
+      <div className="upload-table"><div className="upload-row upload-head"><span>Ảnh hoặc video</span><span>Lưu tại</span><span>Thời gian</span><span>Trạng thái</span><span/></div>{pagedUploads.map((item,index)=><div className="upload-row" key={`${item.key}:${item.accountId||item.state}:${index}`}><div className="upload-file"><b>{item.filename}</b><small>{formatBytes(item.size)}</small></div><div className="upload-destination"><b>{item.accountEmail||'Đang chọn nơi lưu'}</b><small>Google Drive</small></div><div className="upload-path"><b>{new Date(item.receivedAt).toLocaleDateString('vi-VN')}</b><small>{new Date(item.receivedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}</small></div><div><span className={`upload-status state-${item.state.toLowerCase()}`}>{item.state==='VERIFIED'||item.state==='UPLOADED'?'Đã an toàn':item.state==='UPLOADING'||item.state==='VERIFYING'?'Đang lưu':item.state==='QUEUED'||item.state==='BLOCKED'?'Đang chờ':'Cần thử lại'}</span></div><div>{item.webViewLink&&<button className="open-drive" onClick={()=>window.photoSyncDesktop?.openExternal(item.webViewLink!)}>Xem ảnh ↗</button>}</div></div>)}</div>
+      {visibleUploads.length>0&&<div className="upload-pagination"><span>Hiển thị {(uploadPage-1)*uploadPageSize+1}–{Math.min(uploadPage*uploadPageSize,visibleUploads.length)} / {visibleUploads.length}</span><label>Mỗi trang <select value={uploadPageSize} onChange={e=>setUploadPageSize(Number(e.target.value))}><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select></label><div><button disabled={uploadPage===1} onClick={()=>setUploadPage(1)}>«</button><button disabled={uploadPage===1} onClick={()=>setUploadPage(page=>page-1)}>‹</button><b>{uploadPage} / {uploadPageCount}</b><button disabled={uploadPage===uploadPageCount} onClick={()=>setUploadPage(page=>page+1)}>›</button><button disabled={uploadPage===uploadPageCount} onClick={()=>setUploadPage(uploadPageCount)}>»</button></div></div>}
+      {!visibleUploads.length&&<Empty title="Chưa có bản sao" description="Ảnh và video được bảo vệ sẽ xuất hiện tại đây."/>}
+    </section>;
+    if(active==='Tài khoản lưu trữ')return <section className="page-section accounts-layout"><div className="panel accounts-panel"><div className="panel-head"><div><h3>Tài khoản Google Drive</h3><p>Thêm hoặc ngắt kết nối nơi lưu ảnh</p></div><button className="add-account compact-button" onClick={()=>void addGoogle()}>＋ Thêm tài khoản</button></div>{accounts.length?<div className="drive-account-list">{accounts.map(account=>{const total=account.totalBytes||account.freeBytes;const usedPercent=total?Math.min(100,account.usedBytes/total*100):0;return <article className="drive-account" key={account.id}><div className="google">G</div><div className="drive-account-main"><div className="drive-account-title"><div><b>{account.email}</b><small>{account.status==='ready'?'Đã kết nối':'Cần kết nối lại'}</small></div><button disabled={removingAccount===account.id} className="remove-account" onClick={()=>void removeGoogle(account)}>{removingAccount===account.id?'Đang xóa…':'Ngắt kết nối'}</button></div>{account.status==='ready'?<><div className="progress"><i style={{width:`${usedPercent}%`}}/></div><div className="quota-row"><span>Đã dùng {formatBytes(account.usedBytes)} / {formatBytes(total)}</span><b>Còn trống {formatBytes(account.freeBytes)}</b></div></>:<div className="quota-unavailable">Không đọc được dung lượng. Hãy kết nối lại tài khoản.</div>}</div></article>})}</div>:<Empty title="Chưa có tài khoản" description="Thêm Google Drive để ảnh luôn có một bản sao an toàn."/>}<button className="sync-now" onClick={()=>void retryCloud()}>Sao lưu ngay</button></div><div className="panel details-panel"><h3>Thư viện trên máy</h3><div className="big-stat">{media.length}<small>ảnh và video</small></div><p className="muted">Ảnh gốc được lưu trong thư viện PhotoSync trên máy này.</p><button className="sync-now" onClick={()=>window.photoSyncDesktop?.openLibrary()}>Mở thư viện</button></div></section>;
+    return <section className="page-section settings-list"><div className="panel"><h3>Hiển thị</h3><label className="setting-row"><div><b>Lưới ảnh thu gọn</b><small>Hiển thị nhiều ảnh hơn trên một hàng.</small></div><input type="checkbox" checked={compact} onChange={e=>{setCompact(e.target.checked);localStorage.setItem('photosync.compact',String(e.target.checked))}}/></label></div><div className="panel"><h3>Dữ liệu</h3><div className="setting-row"><div><b>Thư viện trên máy</b><small>{status.libraryPath||'Pictures/PhotoSync'}</small></div><button onClick={()=>window.photoSyncDesktop?.openLibrary()}>Mở thư mục</button></div><div className="setting-row"><div><b>Làm mới trạng thái</b><small>Cập nhật ảnh, kết nối và tài khoản lưu trữ.</small></div><button onClick={()=>void refresh()}>Làm mới</button></div></div></section>;
+  }
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">P</div><div><b>PhotoSync</b><small>Laptop Photo Hub</small></div></div>
+      <div className="brand"><img className="brand-logo" src={logoUrl} alt=""/><div><b>PhotoSync</b><small>Ảnh của bạn</small></div></div>
       <nav>{nav.map(([icon,label])=><button key={label} className={active===label?'nav-item active':'nav-item'} onClick={()=>setActive(label)}><span>{icon}</span>{label}</button>)}</nav>
-      <div className="sidebar-status"><span className={tunnel.connected?'live-dot':'status-dot'}/><div><b>{tunnel.connected?'Internet Tunnel online':'Đang nối tunnel...'}</b><small>{tunnel.relayUrl||'PhotoSync Relay'}</small></div></div>
+      <div className="sidebar-status"><span className={tunnel.connected?'live-dot':'status-dot'}/><div><b>{tunnel.connected?'Đã kết nối':'Đang kết nối'}</b><small>{tunnel.connected?'Sẵn sàng nhận ảnh':'Tự động thử lại'}</small></div></div>
     </aside>
 
     <main className="workspace">
-      <header className="topbar"><div><h1>{active}</h1><p>Mobile → Internet Tunnel → Laptop → Local / Google Drive</p></div><div className="top-actions"><div className="search-box"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm ảnh, video..."/><kbd>⌘ K</kbd></div><button className="avatar">PS</button></div></header>
-      <section className="toolbar"><div className="tabs"><button className="selected">Tất cả</button><button>Năm</button><button>Tháng</button><button>Ngày</button><button onClick={()=>window.photoSyncDesktop?.openLibrary()}>Mở thư mục</button></div><div className="view-actions"><button onClick={()=>void refresh()}>↻</button><button>▦</button></div></section>
-
-      <section className="content-area">
-        <div className="gallery-pane">
-          <div className="date-heading"><div><h3>Thư viện PhotoSync</h3><span>{filtered.length} mục đã nhận từ mobile</span></div><button>Chọn</button></div>
-          {filtered.length===0?<div className="empty-state"><div className="empty-cloud">▣</div><h2>Quét QR để bắt đầu</h2><p>Điện thoại chỉ cần quét QR bên phải một lần. Sau đó có thể đồng bộ qua Internet mà không cần cùng Wi‑Fi.</p></div>:<div className="photo-grid">{filtered.map(item=><button className="photo-card" key={item.path} onClick={()=>setSelected(item)}><img src={item.url} alt={item.name}/><span className="photo-name">{item.name}</span></button>)}</div>}
-        </div>
-
-        <aside className="right-rail">
-          <div className="panel storage-panel">
-            <div className="panel-head"><div><h3>Ghép điện thoại</h3><p>Quét đúng một lần</p></div><span className={tunnel.connected?'live-dot':'status-dot'}/></div>
-            <div style={{display:'grid',placeItems:'center',padding:'18px 0'}}>
-              {tunnel.pairingPayload?<div style={{background:'#fff',padding:12,borderRadius:18}}><QRCodeSVG value={tunnel.pairingPayload} size={188} level="M" includeMargin={false}/></div>:<div className="empty-cloud">⌛</div>}
-            </div>
-            <div className="storage-summary"><div><span>Internet Tunnel</span><b>{tunnel.connected?'ONLINE':'CONNECTING'}</b></div><small>{tunnel.connected?'Quét QR bằng PhotoSync Mobile. Token ghép nối sẽ được lưu an toàn trên điện thoại; lần sau không cần quét lại.':tunnel.lastError||'Desktop đang kết nối outbound tới relay...'}</small></div>
-          </div>
-
-          <div className="panel backup-panel">
-            <div className="panel-head"><div><h3>Local Storage</h3><p>Bản gốc trên laptop</p></div><span className="live-dot"/></div>
-            <div className="sync-stat"><span>Thư viện</span><b>{media.length} file</b></div>
-            <div className="sync-stat"><span>Đã nhận phiên này</span><b>{status.received}</b></div>
-            <div className="sync-stat"><span>Trùng đã bỏ qua</span><b>{status.duplicates}</b></div>
-            <button className="sync-now" onClick={()=>window.photoSyncDesktop?.openLibrary()}>Mở Pictures/PhotoSync</button>
-          </div>
-
-          <div className="panel storage-panel">
-            <div className="panel-head"><div><h3>Google Drive Pool</h3><p>Storage Manager phía laptop</p></div><span className={status.driveAccounts?'live-dot':'status-dot'}/></div>
-            <div className="storage-summary"><div><span>Tài khoản đã thêm</span><b>{status.driveAccounts||0}</b></div><div><span>Đã upload cloud</span><b>{status.cloudUploaded}</b></div><div><span>Bị chặn bởi quota</span><b>{status.cloudBlocked}</b></div><small>Mỗi Drive tối đa 10 GB cho PhotoSync và luôn chừa ít nhất 5 GB.</small></div>
-            <button className="add-account" onClick={()=>void addGoogle()}>＋ Thêm tài khoản Google</button>
-            <button className="sync-now" onClick={()=>void retryCloud()}>Phân phối file đang chờ</button>
-          </div>
-        </aside>
-      </section>
+      <header className="topbar"><div><h1>{active}</h1><p>{active==='Ảnh'?'Ảnh và video của bạn':active==='Tài khoản lưu trữ'?'Quản lý nơi lưu ảnh an toàn':active==='Bản sao an toàn'?'Theo dõi trạng thái bảo vệ ảnh':'Mọi kỷ niệm ở cùng một nơi'}</p></div><div className="top-actions">{active==='Ảnh'&&<div className="search-box"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm ảnh, video..."/><kbd>⌘ K</kbd></div>}<button className="avatar" onClick={()=>setActive('Cài đặt')}>PS</button></div></header>
+      {renderContent()}
     </main>
 
-    {selected&&<div className="viewer" onClick={()=>setSelected(null)}><div className="viewer-top"><button>‹</button><div><b>{selected.name}</b><small>{selected.sourceDevice||'mobile'} • {new Date(selected.modifiedAt).toLocaleString()}</small></div><span/><button>⋯</button></div><img src={selected.url} alt={selected.name}/><div className="viewer-actions"><button onClick={e=>{e.stopPropagation();window.photoSyncDesktop?.openLibrary()}}>□<small>Mở thư mục</small></button></div></div>}
+    {selected&&<div className="viewer" onClick={()=>setSelected(null)}><div className="viewer-top"><button>‹</button><div><b>{selected.name}</b><small>{new Date(selected.modifiedAt).toLocaleString('vi-VN')}</small></div><span/><button onClick={()=>setSelected(null)}>×</button></div><div className="viewer-scroll" onClick={e=>e.stopPropagation()}>{isVideo(selected.name)?<video className="viewer-image viewer-video" src={selected.url} controls autoPlay playsInline onLoadedMetadata={event=>setMediaDimensions({width:event.currentTarget.videoWidth,height:event.currentTarget.videoHeight,duration:event.currentTarget.duration})}/>:<img className="viewer-image" src={selected.url} alt={selected.name} onLoad={event=>setMediaDimensions({width:event.currentTarget.naturalWidth,height:event.currentTarget.naturalHeight})}/>}<section className="media-info"><div className="media-info-head"><div><h2>{selected.name}</h2><p>{formatBytes(selected.size)} • {new Date(selectedMetadata?.capturedAt||selected.receivedAt).toLocaleString('vi-VN')}</p></div><span className={selectedVerifiedCount>=2?'protection-safe':'protection-warning'}>{selectedVerifiedCount>=2?'Đã sao lưu an toàn':selectedVerifiedCount?'Đang hoàn tất sao lưu':'Đang chờ sao lưu'}</span></div><h3>Thông tin {isVideo(selected.name)?'video':'ảnh'}</h3><div className="metadata-grid">{isVideo(selected.name)?<><div><span>Kích thước</span><b>{mediaDimensions?`${mediaDimensions.width} × ${mediaDimensions.height}`:'Đang đọc…'}</b></div><div><span>Thời lượng</span><b>{mediaDimensions?.duration!=null?formatDuration(mediaDimensions.duration):'Đang đọc…'}</b></div><div><span>Dung lượng</span><b>{formatBytes(selected.size)}</b></div><div><span>Ngày tạo</span><b>{new Date(selected.receivedAt).toLocaleString('vi-VN')}</b></div></>:<><div><span>Kích thước</span><b>{mediaDimensions?`${mediaDimensions.width} × ${mediaDimensions.height}`:'Đang đọc…'}</b></div><div><span>Dung lượng</span><b>{formatBytes(selected.size)}</b></div><div><span>Ngày chụp</span><b>{new Date(selectedMetadata?.capturedAt||selected.receivedAt).toLocaleString('vi-VN')}</b></div>{(selectedMetadata?.make||selectedMetadata?.model)&&<div><span>Máy ảnh</span><b>{[selectedMetadata.make,selectedMetadata.model].filter(Boolean).join(' ')}</b></div>}{selectedMetadata?.lens&&<div><span>Ống kính</span><b>{selectedMetadata.lens}</b></div>}{selectedMetadata?.focalLength&&<div><span>Tiêu cự</span><b>{selectedMetadata.focalLength} mm{selectedMetadata.focalLength35mm?` (${selectedMetadata.focalLength35mm} mm quy đổi)`:''}</b></div>}{selectedMetadata?.aperture&&<div><span>Khẩu độ</span><b>f/{selectedMetadata.aperture}</b></div>}{selectedMetadata?.exposureTime&&<div><span>Tốc độ màn trập</span><b>{formatExposure(selectedMetadata.exposureTime)}</b></div>}{selectedMetadata?.iso&&<div><span>Độ nhạy sáng</span><b>ISO {selectedMetadata.iso}</b></div>}{selectedMetadata?.latitude!=null&&selectedMetadata?.longitude!=null&&<div><span>Vị trí</span><b>{selectedMetadata.latitude.toFixed(5)}, {selectedMetadata.longitude.toFixed(5)}</b></div>}{selectedMetadata?.software&&<div><span>Phần mềm</span><b>{selectedMetadata.software}</b></div>}{metadataLoading&&<div><span>Metadata</span><b>Đang đọc thông tin ảnh…</b></div>}</>}</div><h3>Nơi lưu ảnh</h3><div className="storage-locations"><div><span className={selected.localAvailable?'location-ok':'location-wait'}>{selected.localAvailable?'✓':'○'}</span><div><b>Máy tính này</b><small>{selected.localAvailable?'Ảnh có sẵn trong thư viện':'Ảnh không còn trên máy'}</small></div>{selected.localAvailable&&<button onClick={()=>window.photoSyncDesktop?.openLibrary()}>Mở thư viện</button>}</div>{selectedReplicas.map((replica,index)=><div key={`${replica.accountId||replica.state}:${index}`}><span className={replica.state==='VERIFIED'||replica.state==='UPLOADED'?'location-ok':'location-wait'}>{replica.state==='VERIFIED'||replica.state==='UPLOADED'?'✓':'○'}</span><div><b>{replica.accountEmail||`Google Drive ${index+1}`}</b><small>{replica.state==='VERIFIED'||replica.state==='UPLOADED'?'Đã lưu an toàn':'Đang chờ lưu'}</small></div>{replica.webViewLink&&<button onClick={()=>window.photoSyncDesktop?.openExternal(replica.webViewLink!)}>Xem ảnh ↗</button>}</div>)}</div></section></div></div>}
   </div>
 }

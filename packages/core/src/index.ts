@@ -1,6 +1,6 @@
 export const GIB = 1024 ** 3;
 export const APP_CAP_BYTES = 10 * GIB;
-export const RESERVE_BYTES = 5 * GIB;
+export const RESERVE_BYTES = 100 * 1024 ** 2;
 
 export type StorageAccount = {
   id: string;

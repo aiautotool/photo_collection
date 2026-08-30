@@ -7,14 +7,14 @@ describe('storage policy', () => {
     expect(safeAvailable(a)).toBe(1*GIB);
   });
 
-  it('always preserves 5 GiB provider reserve', () => {
-    const a:StorageAccount={id:'1',email:'a@gmail.com',appUsedBytes:0,providerFreeBytes:6*GIB};
-    expect(safeAvailable(a)).toBe(1*GIB);
+  it('preserves a small provider safety reserve', () => {
+    const a:StorageAccount={id:'1',email:'a@gmail.com',appUsedBytes:0,providerFreeBytes:200*1024**2};
+    expect(safeAvailable(a)).toBe(100*1024**2);
   });
 
   it('moves a file to another account when current account cannot fit it safely', () => {
     const accounts:StorageAccount[]=[
-      {id:'1',email:'full@gmail.com',appUsedBytes:9.8*GIB,providerFreeBytes:5.1*GIB},
+      {id:'1',email:'full@gmail.com',appUsedBytes:9.8*GIB,providerFreeBytes:.2*GIB},
       {id:'2',email:'ready@gmail.com',appUsedBytes:2*GIB,providerFreeBytes:13*GIB},
     ];
     expect(chooseAccount(accounts, 1*GIB)?.id).toBe('2');

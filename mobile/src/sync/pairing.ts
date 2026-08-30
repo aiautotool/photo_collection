@@ -3,9 +3,12 @@ import * as SecureStore from 'expo-secure-store';
 export type PairedDesktop = {
   v: 1;
   relayUrl: string;
+  publicUrl?: string;
   desktopId: string;
   pairToken: string;
   deviceId: string;
+  receiverUrl?: string;
+  pairCode?: string;
 };
 
 const KEY = 'photosync.paired-desktop.v1';
@@ -24,11 +27,18 @@ export function parsePairingQr(raw: string): Omit<PairedDesktop, 'deviceId'> {
   let parsed: any;
   try { parsed = JSON.parse(raw); } catch { throw new Error('QR không phải PhotoSync pairing QR'); }
   if (parsed?.v !== 1 || !parsed?.relayUrl || !parsed?.desktopId || !parsed?.pairToken) throw new Error('QR PhotoSync không hợp lệ');
+  const receiverUrl = parsed.receiverUrl ? normalizeRelayUrl(String(parsed.receiverUrl)) : undefined;
+  const publicUrl = parsed.publicUrl ? normalizeRelayUrl(String(parsed.publicUrl)) : undefined;
+  const pairCode = parsed.pairCode ? String(parsed.pairCode) : undefined;
+  if ((receiverUrl && !pairCode) || (!receiverUrl && pairCode)) throw new Error('QR PhotoSync thiếu thông tin kết nối LAN');
   return {
     v: 1,
     relayUrl: normalizeRelayUrl(String(parsed.relayUrl)),
+    publicUrl,
     desktopId: String(parsed.desktopId),
     pairToken: String(parsed.pairToken),
+    receiverUrl,
+    pairCode,
   };
 }
 

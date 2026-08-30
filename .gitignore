@@ -5,8 +5,14 @@ mobile/android/.gradle/
 mobile/android/app/build/
 mobile/ios/Pods/
 mobile/ios/build/
+mobile/build/
 desktop/dist/
 desktop/dist-electron/
+desktop/bin/
+desktop/build/
+desktop/release/
+relay/dist/
+/*.js
 packages/*/dist/
 .idea/
 .vscode/
@@ -17,4 +23,5 @@ packages/*/dist/
 !**/.env.example
 **/google-services.json
 **/GoogleService-Info.plist
+**/google-oauth.json
 **/*client_secret*.json
